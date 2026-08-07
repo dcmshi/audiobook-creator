@@ -1,6 +1,10 @@
+import logging
+import re
 from pathlib import Path
 
 from audiobook_creator.models import Block, BlockType, Document, DocumentMeta
+
+logger = logging.getLogger(__name__)
 
 # docling label value -> our BlockType; None = drop (page furniture)
 _LABEL_MAP: dict[str, BlockType | None] = {
@@ -24,18 +28,43 @@ def _label_value(item) -> str:
     return str(getattr(label, "value", label))
 
 
-def _item_text(item, dl_doc) -> str:
-    # TableItem/PictureItem are FloatingItems and carry no .text; a table's
-    # content is only reachable via export_to_markdown(doc).
-    text = getattr(item, "text", "") or ""
-    if not text:
-        export = getattr(item, "export_to_markdown", None)
-        if export is not None:
-            try:
-                text = export(dl_doc) or ""
-            except Exception:
-                text = ""
-    return " ".join(text.split())
+def _plain_text(item) -> str:
+    return " ".join((getattr(item, "text", "") or "").split())
+
+
+_MD_SEPARATOR = re.compile(r"[|\s:\-]+")
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _markdown_table_to_prose(markdown: str) -> str:
+    rows: list[str] = []
+    for line in _HTML_COMMENT.sub("", markdown).splitlines():
+        line = line.strip()
+        if not line or _MD_SEPARATOR.fullmatch(line):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|") if c.strip()]
+        if cells:
+            rows.append(", ".join(cells))
+    return ". ".join(rows) + ("." if rows else "")
+
+
+def _table_text(item, dl_doc) -> str:
+    # docling TableItem is a FloatingItem with no .text; its content is only
+    # reachable via export_to_markdown(doc). Pictures must NOT take this path:
+    # their export emits a diagnostic HTML comment, and captions arrive as
+    # separate caption items already.
+    text = _plain_text(item)
+    if text:
+        return text
+    export = getattr(item, "export_to_markdown", None)
+    if export is None:
+        return ""
+    try:
+        markdown = export(dl_doc) or ""
+    except Exception as exc:
+        logger.warning("table markdown export failed; table content dropped: %s", exc)
+        return ""
+    return _markdown_table_to_prose(markdown)
 
 
 def document_from_docling(dl_doc) -> Document:
@@ -50,7 +79,7 @@ def document_from_docling(dl_doc) -> Document:
         block_type = _LABEL_MAP[label]
         if block_type is None:
             continue
-        text = _item_text(item, dl_doc)
+        text = _table_text(item, dl_doc) if label == "table" else _plain_text(item)
         if label == "title" and title is None:
             title = text
         if not text and block_type is not BlockType.FIGURE:

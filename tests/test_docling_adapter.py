@@ -102,7 +102,25 @@ def test_textless_table_uses_markdown_export():
 
     doc = document_from_docling(Doc())
     assert [b.type for b in doc.blocks] == [BlockType.TABLE]
-    assert "2026" in doc.blocks[0].text
+    assert doc.blocks[0].text == "Year, Rain. 2026, 400mm."
+
+
+def test_textless_picture_does_not_use_markdown_export():
+    class _Picture:
+        label = SimpleNamespace(value="picture")
+
+        def export_to_markdown(self, doc):
+            return "<!-- 🖼️❌ Image not available. -->"
+
+    class Doc(SimpleNamespace):
+        name = "t"
+
+        def iterate_items(self):
+            return [(_Picture(), 0)]
+
+    doc = document_from_docling(Doc())
+    assert [b.type for b in doc.blocks] == [BlockType.FIGURE]
+    assert doc.blocks[0].text == ""  # diagnostic comment must never be narrated
 
 
 @pytest.mark.docling
@@ -133,6 +151,9 @@ def test_adapter_against_real_docling(tmp_path: Path):
     table_hits = [b for b in doc.blocks if "CellUnique42" in b.text]
     assert len(table_hits) == 1
     assert table_hits[0].type is BlockType.TABLE
+    # spoken prose, not markdown scaffolding
+    assert "|" not in table_hits[0].text
+    assert "<!--" not in table_hits[0].text
 
     # heading rank comes from item.level, not traversal depth: h2 outranks h3
     levels = {b.text: b.level for b in doc.blocks if b.type is BlockType.HEADING}
