@@ -71,11 +71,11 @@ Docling converts the source into an ordered list of typed blocks: `heading[level
 
 ### 2. Structure — `document.json → chapters/NN.json`
 
-Split into chapters via heading hierarchy (EPUB TOC when available). Each chapter is classified `front_matter` / `body` / `back_matter` — heuristics first (position, title keywords like "References", "Index", "Copyright"), cheap LLM call as tiebreaker when ambiguous. Non-body chapters are kept but flagged and default-excluded from audio; CLI/web expose include/exclude overrides.
+Split into chapters via heading hierarchy (EPUB TOC when available). Each chapter is classified `front_matter` / `body` / `back_matter` — heuristics first (position, title keywords like "References", "Index", "Copyright"), cheap LLM call as tiebreaker when ambiguous. When no LLM is available (no keys, or `local_only` without Ollama), heuristics alone decide and ambiguous chapters default to `body` (safe: worst case is extra audio, never missing content). Non-body chapters are kept but flagged and default-excluded from audio; CLI/web expose include/exclude overrides.
 
 ### 3. Process — `chapters/*.json → processed/NN.txt`
 
-Output is plain speakable text; the only markup is `[[pause]]` at section boundaries.
+Output is plain speakable text; the only markup is `[[pause]]` at section boundaries, plus `[[speaker:N]]` line prefixes in podcast mode only.
 
 - **verbatim:** chunk-by-chunk LLM normalization with a strict change-nothing-else prompt: expand numbers/abbreviations/units, drop citation markers ("[37]", superscripts) and footnote references, "Fig. 3" → "Figure 3". A rule-based fallback (`--no-llm`, or per-chunk on validation failure) keeps the pipeline functional with no LLM configured.
 - **rewrite:** content-preserving re-expression for listening. Tables → spoken summary; figures → VLM description of the extracted image, spliced at the reference point; equations → spoken or intuitive description; citation clusters → natural attribution ("Smith and colleagues found…").
