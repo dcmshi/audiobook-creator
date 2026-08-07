@@ -1,3 +1,4 @@
+import os
 import uuid
 from pathlib import Path
 
@@ -64,4 +65,13 @@ class Job:
         return sorted(p.parent.name for p in jobs_dir.glob("*/job.json"))
 
     def save(self) -> None:
-        (self.dir / "job.json").write_text(self.state.model_dump_json(indent=2), encoding="utf-8")
+        # Write aside and rename: a crash mid-write must not leave job.json truncated,
+        # which would strand the whole job as unreadable.
+        path = self.dir / "job.json"
+        tmp = path.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(self.state.model_dump_json(indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
