@@ -92,3 +92,15 @@ def test_resume_unknown_job_id_exits_cleanly(tmp_path: Path):
 def test_doctor_runs():
     result = runner.invoke(app, ["doctor"])
     assert "ffmpeg" in result.output.lower()
+
+
+def test_preview_requires_processed_text(tmp_path: Path):
+    jobs_dir = tmp_path / "jobs"
+    job = Job.create(jobs_dir, JobConfig(source="x.epub", tts_backend="stub"))
+    result = runner.invoke(app, ["preview", job.state.id, "--jobs-dir", str(jobs_dir)])
+    assert result.exit_code != 0  # no processed text yet
+
+    (job.processed_dir / "000.txt").write_text("Hello preview world.", encoding="utf-8")
+    result = runner.invoke(app, ["preview", job.state.id, "--jobs-dir", str(jobs_dir)])
+    assert result.exit_code == 0, result.output
+    assert (job.output_dir / "preview.wav").exists()

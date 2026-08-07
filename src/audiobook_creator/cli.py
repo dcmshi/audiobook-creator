@@ -10,6 +10,8 @@ from audiobook_creator.models import JobConfig, Mode, StageStatus
 
 app = typer.Typer(help="Turn PDFs and EPUBs into audiobooks.", no_args_is_help=True)
 
+PREVIEW_CHARS = 300
+
 _STATUS_ICON = {
     StageStatus.PENDING: "·",
     StageStatus.RUNNING: "~",
@@ -109,6 +111,28 @@ def jobs(jobs_dir: Path = typer.Option(Path("jobs"), "--jobs-dir")) -> None:
             f"{job_id} {warning} {job.state.config.mode.value:<8}  {stages}  "
             f"{job.state.config.source}"
         )
+
+
+@app.command()
+def preview(
+    job_id: str,
+    jobs_dir: Path = typer.Option(Path("jobs"), "--jobs-dir"),
+) -> None:
+    """Synthesize ~30s from the first processed chapter to output/preview.wav."""
+    from audiobook_creator.synthesize.base import chunk_text, get_backend, write_wav
+
+    job = _load_job(jobs_dir, job_id)
+    processed = sorted(job.processed_dir.glob("*.txt"))
+    if not processed:
+        typer.echo("error: no processed text yet - run convert (or resume) first", err=True)
+        raise typer.Exit(code=2)
+    text = processed[0].read_text(encoding="utf-8").replace("[[pause]]", " ")[:PREVIEW_CHARS]
+    cfg = job.state.config
+    backend = get_backend(cfg.tts_backend, local_only=cfg.local_only)
+    pcm = b"".join(backend.synthesize(c, cfg.voice) for c in chunk_text(text))
+    out = job.output_dir / "preview.wav"
+    write_wav(out, pcm, backend.sample_rate)
+    typer.echo(f"  -> {out}")
 
 
 @app.command()
