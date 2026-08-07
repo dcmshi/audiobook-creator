@@ -24,26 +24,41 @@ def _label_value(item) -> str:
     return str(getattr(label, "value", label))
 
 
+def _item_text(item, dl_doc) -> str:
+    # TableItem/PictureItem are FloatingItems and carry no .text; a table's
+    # content is only reachable via export_to_markdown(doc).
+    text = getattr(item, "text", "") or ""
+    if not text:
+        export = getattr(item, "export_to_markdown", None)
+        if export is not None:
+            try:
+                text = export(dl_doc) or ""
+            except Exception:
+                text = ""
+    return " ".join(text.split())
+
+
 def document_from_docling(dl_doc) -> Document:
     blocks: list[Block] = []
     title: str | None = None
-    for item, _level in dl_doc.iterate_items():
+    # iterate_items() yields (item, depth); depth is tree-traversal depth, not
+    # heading rank — rank lives on item.level (verified against docling-core).
+    for item, _depth in dl_doc.iterate_items():
         label = _label_value(item)
         if label not in _LABEL_MAP:
             continue
         block_type = _LABEL_MAP[label]
         if block_type is None:
             continue
-        text = " ".join((getattr(item, "text", "") or "").split())
+        text = _item_text(item, dl_doc)
         if label == "title" and title is None:
             title = text
+        if not text and block_type is not BlockType.FIGURE:
+            continue  # a picture with no caption is still content
         if block_type is BlockType.HEADING:
             level = getattr(item, "level", 1) or 1
-            if text:
-                blocks.append(Block(type=block_type, text=text, level=int(level)))
-        elif block_type is BlockType.FIGURE:
-            blocks.append(Block(type=block_type, text=text))
-        elif text:
+            blocks.append(Block(type=block_type, text=text, level=int(level)))
+        else:
             blocks.append(Block(type=block_type, text=text))
     meta = DocumentMeta(title=title or getattr(dl_doc, "name", None) or "Untitled")
     return Document(meta=meta, blocks=blocks)

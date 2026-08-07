@@ -82,3 +82,59 @@ def test_run_stage_writes_document_json(make_epub, tmp_path: Path):
     assert job.document_path.is_file()
     doc = Document.model_validate_json(job.document_path.read_text(encoding="utf-8"))
     assert doc.meta.title == "Test Book"
+
+
+class _TextlessTable:
+    """Mimics docling-core TableItem: a FloatingItem with no .text attribute."""
+
+    label = SimpleNamespace(value="table")
+
+    def export_to_markdown(self, doc):
+        return "| Year | Rain |\n| 2026 | 400mm |"
+
+
+def test_textless_table_uses_markdown_export():
+    class Doc(SimpleNamespace):
+        name = "t"
+
+        def iterate_items(self):
+            return [(_TextlessTable(), 0)]
+
+    doc = document_from_docling(Doc())
+    assert [b.type for b in doc.blocks] == [BlockType.TABLE]
+    assert "2026" in doc.blocks[0].text
+
+
+@pytest.mark.docling
+def test_adapter_against_real_docling(tmp_path: Path):
+    pytest.importorskip("docling")
+    from docling.document_converter import DocumentConverter
+
+    html = tmp_path / "sample.html"
+    html.write_text(
+        "<html><body>"
+        "<h1>Doc Title</h1>"
+        "<p>Intro paragraph text.</p>"
+        "<h2>Section A</h2>"
+        "<p>Alpha body.</p>"
+        "<table><tr><td>CellUnique42</td><td>Other</td></tr></table>"
+        "<h3>Sub B</h3>"
+        "<p>Beta body.</p>"
+        "</body></html>",
+        encoding="utf-8",
+    )
+    result = DocumentConverter().convert(str(html))
+    doc = document_from_docling(result.document)
+
+    paragraphs = [b.text for b in doc.blocks if b.type is BlockType.PARAGRAPH]
+    assert "Alpha body." in paragraphs and "Beta body." in paragraphs
+
+    # tables are FloatingItems with no .text — content must still arrive, exactly once
+    table_hits = [b for b in doc.blocks if "CellUnique42" in b.text]
+    assert len(table_hits) == 1
+    assert table_hits[0].type is BlockType.TABLE
+
+    # heading rank comes from item.level, not traversal depth: h2 outranks h3
+    levels = {b.text: b.level for b in doc.blocks if b.type is BlockType.HEADING}
+    assert "Section A" in levels and "Sub B" in levels
+    assert levels["Section A"] < levels["Sub B"]
