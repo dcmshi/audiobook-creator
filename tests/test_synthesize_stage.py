@@ -97,7 +97,7 @@ def test_failed_chunk_becomes_silence_not_crash(tmp_path: Path, caplog):
     assert "1 of 3" in job.state.errors["synthesize:failed_chunks"]
 
 
-def test_failed_chunk_is_not_cached_and_later_run_repairs_it(tmp_path: Path):
+def test_degraded_chapter_auto_repairs_on_the_next_run(tmp_path: Path):
     job = _job_with_processed(
         tmp_path,
         {"000.txt": "This first segment is long enough to matter. [[pause]] Second segment here."},
@@ -109,21 +109,48 @@ def test_failed_chunk_is_not_cached_and_later_run_repairs_it(tmp_path: Path):
     cache_dir = job.audio_dir / "cache"
     assert len(list(cache_dir.glob("*.pcm"))) == 1  # only the chunk that really synthesized
     assert "1 of 2" in job.state.errors["synthesize:failed_chunks"]
-    degraded = wav_duration_seconds(job.audio_dir / "000.wav")
+    assert job.state.errors["synthesize:degraded"] == "000"
+    degraded_duration = wav_duration_seconds(job.audio_dir / "000.wav")
 
-    (job.audio_dir / "000.wav").unlink()  # repair run, backend now healthy
+    # Backend is healthy now. No manual deletion: the recorded degradation is what
+    # makes the stage rebuild this chapter.
     synth_stage.run_stage(job)
     assert len(list(cache_dir.glob("*.pcm"))) == 2
-    assert wav_duration_seconds(job.audio_dir / "000.wav") > degraded
+    assert wav_duration_seconds(job.audio_dir / "000.wav") > degraded_duration
+    assert not [k for k in job.state.errors if k.startswith("synthesize:")]
+
+
+def test_wholly_failed_chapter_raises_and_spares_healthy_chapters(tmp_path: Path):
+    job = _job_with_processed(
+        tmp_path,
+        {"000.txt": "Good text.", "001.txt": "BAD one. [[pause]] BAD two."},
+        backend="flaky",
+    )
+    with pytest.raises(RuntimeError, match="chapter\\(s\\) 001"):
+        synth_stage.run_stage(job)
+    # The healthy chapter survives, so a resume only retries the failed one.
+    assert (job.audio_dir / "000.wav").exists()
+    assert not (job.audio_dir / "001.wav").exists()
 
 
 def test_all_chunks_failing_raises_and_leaves_nothing_behind(tmp_path: Path):
     job = _job_with_processed(
         tmp_path, {"000.txt": "BAD one. [[pause]] BAD two."}, backend="flaky"
     )
-    with pytest.raises(RuntimeError, match="all 2 chunks failed"):
+    with pytest.raises(RuntimeError, match="all 2 chunks attempted in this run failed"):
         synth_stage.run_stage(job)
     # Nothing cached and no WAV, so a resume retries from scratch instead of
     # accepting a silent chapter as done.
     assert list((job.audio_dir / "cache").glob("*.pcm")) == []
     assert not (job.audio_dir / "000.wav").exists()
+
+
+def test_clean_run_leaves_no_stale_failure_records(tmp_path: Path):
+    job = _job_with_processed(tmp_path, {"000.txt": "Hello world."})
+    job.state.errors["synthesize:failed_chunks"] = "3 of 4 chunks failed; silence inserted"
+    job.state.errors["synthesize:degraded"] = "000"
+    job.save()
+
+    synth_stage.run_stage(job)
+    assert not [k for k in job.state.errors if k.startswith("synthesize:")]
+    assert (job.audio_dir / "000.wav").exists()
