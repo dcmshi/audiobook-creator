@@ -119,7 +119,10 @@ def run_stage(job: Job) -> None:
 
     for txt_path in sorted(job.processed_dir.glob("*.txt")):
         wav_path = job.audio_dir / f"{txt_path.stem}.wav"
-        if wav_path.exists():
+        # Rebuild when the text is newer than its audio, so hand-edited processed text
+        # is honoured by `abc resume --from-stage synthesize`. The chunk cache means
+        # unchanged passages cost a file read rather than a fresh synthesis.
+        if wav_path.exists() and wav_path.stat().st_mtime_ns >= txt_path.stat().st_mtime_ns:
             continue
         pcm, chapter_attempted, chapter_failed = _synthesize_chapter(
             backend, cfg.voice, cache_dir, txt_path.read_text(encoding="utf-8")

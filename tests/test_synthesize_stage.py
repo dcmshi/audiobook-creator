@@ -1,3 +1,5 @@
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -81,6 +83,23 @@ def test_existing_wavs_skipped(tmp_path: Path):
     mtime = wav.stat().st_mtime_ns
     synth_stage.run_stage(job)
     assert wav.stat().st_mtime_ns == mtime
+
+
+def test_edited_processed_text_rebuilds_the_chapter(tmp_path: Path):
+    job = _job_with_processed(tmp_path, {"000.txt": "Hello world."})
+    synth_stage.run_stage(job)
+    wav = job.audio_dir / "000.wav"
+    before = wav.read_bytes()
+
+    txt = job.processed_dir / "000.txt"
+    txt.write_text("Hello world. And a good deal more text than before.", encoding="utf-8")
+    # Windows' coarse clock can stamp the rewrite inside the same tick as the WAV write,
+    # which would make "newer" untestable; push it clearly past.
+    future = time.time() + 10
+    os.utime(txt, (future, future))
+
+    synth_stage.run_stage(job)
+    assert wav.read_bytes() != before
 
 
 def test_failed_chunk_becomes_silence_not_crash(tmp_path: Path, caplog):
