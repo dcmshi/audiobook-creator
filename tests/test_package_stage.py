@@ -110,3 +110,13 @@ def _track_number(mp3: Path) -> str:
         text=True,
     )
     return json.loads(result.stdout)["format"]["tags"]["track"]
+
+
+@requires_ffmpeg
+def test_m4b_builds_when_jobs_dir_is_relative(tmp_path: Path, monkeypatch):
+    # Reproduces real CLI use: the default --jobs-dir is the RELATIVE path
+    # "jobs", and ffmpeg resolves concat entries against the list file's dir.
+    monkeypatch.chdir(tmp_path)
+    job = _prepared_job(Path("jobs"), ["m4b"])
+    run_stage(job)
+    assert (job.output_dir / "Test Book.m4b").exists()

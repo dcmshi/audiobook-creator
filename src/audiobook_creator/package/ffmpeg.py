@@ -74,7 +74,10 @@ def write_ffmetadata(
 
 def build_m4b(wavs: list[Path], meta_path: Path, out: Path, cover: Path | None) -> None:
     list_path = out.parent / "concat.txt"
-    escaped = [w.as_posix().replace("'", "'\\''") for w in wavs]
+    # ffmpeg resolves concat-list entries relative to the LIST FILE's directory,
+    # not the CWD — relative wav paths (the CLI's default jobs/ dir) must be
+    # absolutized or they double up against output/.
+    escaped = [w.resolve().as_posix().replace("'", "'\\''") for w in wavs]
     list_path.write_text("".join(f"file '{p}'\n" for p in escaped), encoding="utf-8")
     args = [
         "ffmpeg",
