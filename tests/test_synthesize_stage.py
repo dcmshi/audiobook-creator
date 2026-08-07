@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from audiobook_creator.core.job import Job
 from audiobook_creator.models import JobConfig
 from audiobook_creator.synthesize import stage as synth_stage
@@ -18,7 +20,27 @@ class FlakyBackend:
         return b"\x01\x00" * int(0.010 * len(text) * self.sample_rate)
 
 
+class TransientBackend:
+    """Fails its next `failures_remaining` calls, then behaves. Models a passing outage."""
+
+    name = "transient"
+    sample_rate = 24000
+    failures_remaining = 0
+
+    def synthesize(self, text: str, voice: str) -> bytes:
+        if TransientBackend.failures_remaining > 0:
+            TransientBackend.failures_remaining -= 1
+            raise RuntimeError("temporary outage")
+        return b"\x01\x00" * int(0.010 * len(text) * self.sample_rate)
+
+
 register_backend("flaky", FlakyBackend, is_local=True)
+register_backend("transient", TransientBackend, is_local=True)
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_backoff(monkeypatch):
+    monkeypatch.setattr(synth_stage, "_RETRY_BACKOFF_SECONDS", (0, 0))
 
 
 def _job_with_processed(tmp_path: Path, texts: dict[str, str], backend: str = "stub") -> Job:
@@ -62,9 +84,46 @@ def test_existing_wavs_skipped(tmp_path: Path):
 
 
 def test_failed_chunk_becomes_silence_not_crash(tmp_path: Path, caplog):
+    # Pause-separated so the failing chunk is one of three: a run in which *every*
+    # chunk fails is a hard error, covered separately below.
     job = _job_with_processed(
-        tmp_path, {"000.txt": "Good text. BAD text. More good."}, backend="flaky"
+        tmp_path,
+        {"000.txt": "Good text. [[pause]] BAD text. [[pause]] More good."},
+        backend="flaky",
     )
     synth_stage.run_stage(job)  # must not raise
     assert (job.audio_dir / "000.wav").exists()
     assert any("BAD" in r.message or "failed" in r.message.lower() for r in caplog.records)
+    assert "1 of 3" in job.state.errors["synthesize:failed_chunks"]
+
+
+def test_failed_chunk_is_not_cached_and_later_run_repairs_it(tmp_path: Path):
+    job = _job_with_processed(
+        tmp_path,
+        {"000.txt": "This first segment is long enough to matter. [[pause]] Second segment here."},
+        backend="transient",
+    )
+    TransientBackend.failures_remaining = 3  # exhausts every attempt for chunk one
+
+    synth_stage.run_stage(job)
+    cache_dir = job.audio_dir / "cache"
+    assert len(list(cache_dir.glob("*.pcm"))) == 1  # only the chunk that really synthesized
+    assert "1 of 2" in job.state.errors["synthesize:failed_chunks"]
+    degraded = wav_duration_seconds(job.audio_dir / "000.wav")
+
+    (job.audio_dir / "000.wav").unlink()  # repair run, backend now healthy
+    synth_stage.run_stage(job)
+    assert len(list(cache_dir.glob("*.pcm"))) == 2
+    assert wav_duration_seconds(job.audio_dir / "000.wav") > degraded
+
+
+def test_all_chunks_failing_raises_and_leaves_nothing_behind(tmp_path: Path):
+    job = _job_with_processed(
+        tmp_path, {"000.txt": "BAD one. [[pause]] BAD two."}, backend="flaky"
+    )
+    with pytest.raises(RuntimeError, match="all 2 chunks failed"):
+        synth_stage.run_stage(job)
+    # Nothing cached and no WAV, so a resume retries from scratch instead of
+    # accepting a silent chapter as done.
+    assert list((job.audio_dir / "cache").glob("*.pcm")) == []
+    assert not (job.audio_dir / "000.wav").exists()
