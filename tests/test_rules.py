@@ -17,6 +17,17 @@ from audiobook_creator.process.rules import normalize
         ("Growth of 40% overall.", "Growth of 40 percent overall."),
         ("R&D spending rose.", "R and D spending rose."),
         ("Too   many    spaces.", "Too many spaces."),
+        # sentence-final abbreviations must keep the sentence boundary
+        (
+            "It was studied by Smith et al. Later work disagreed.",
+            "It was studied by Smith and colleagues. Later work disagreed.",
+        ),
+        ("The finding is due to Smith et al.", "The finding is due to Smith and colleagues."),
+        ("Roe vs. Wade was decided.", "Roe versus Wade was decided."),
+        # bracketed integers glued to a word are subscripts, not citations
+        ("The value arr[0] holds it.", "The value arr[0] holds it."),
+        ("Read matrix[3] and matrix[4].", "Read matrix[3] and matrix[4]."),
+        ("Cited [5] but not arr[5].", "Cited but not arr[5]."),
     ],
 )
 def test_normalize(raw: str, expected: str):

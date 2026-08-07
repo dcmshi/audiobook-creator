@@ -1,11 +1,16 @@
 import re
 
-# "[12]", "[3, 4]", "[7-9]", "[7–9]" — bracketed numeric citation markers
-_CITATION = re.compile(r"\s?\[\d+(?:\s*[,–-]\s*\d+)*\]")
+# "[12]", "[3, 4]", "[7-9]", "[7–9]" — bracketed numeric citation markers.
+# The lookbehind spares subscripts like "arr[0]", where the bracket abuts a word.
+_CITATION = re.compile(r"\s?(?<!\w)\[\d+(?:\s*[,–-]\s*\d+)*\]")
 
 _REPLACEMENTS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bFig\.\s*"), "Figure "),
     (re.compile(r"\bEq\.\s*"), "Equation "),
+    # Sentence-final "et al." keeps the period, or the next sentence runs on. The
+    # lookahead unsets IGNORECASE so [A-Z] stays uppercase-only and mid-sentence
+    # "et al. found" is left to the general rule below.
+    (re.compile(r"\bet al\.(?=\s+(?-i:[A-Z])|\s*$)", re.IGNORECASE), "and colleagues."),
     (re.compile(r"\bet al\.", re.IGNORECASE), "and colleagues"),
     (re.compile(r"\be\.g\.,?\s*", re.IGNORECASE), "for example, "),
     (re.compile(r"\bi\.e\.,?\s*", re.IGNORECASE), "that is, "),
