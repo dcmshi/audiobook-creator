@@ -38,3 +38,8 @@ addopts = "-m 'not docling and not kokoro'"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint.flake8-bugbear]
+# Typer's API requires these in argument defaults; they build inert metadata objects,
+# not the mutable shared state B008 exists to catch.
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
