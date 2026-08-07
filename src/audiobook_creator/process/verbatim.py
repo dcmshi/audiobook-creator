@@ -11,6 +11,11 @@ _PLACEHOLDER_TITLE = "Beginning"
 _SKIPPED = {BlockType.TABLE, BlockType.FIGURE, BlockType.FOOTNOTE}
 
 
+def has_speakable_blocks(chapter: Chapter) -> bool:
+    """True when blocks contribute narration beyond the chapter's title announcement."""
+    return any(block.type not in _SKIPPED and normalize(block.text) for block in chapter.blocks)
+
+
 def render_chapter_text(chapter: Chapter) -> str:
     parts: list[str] = []
     # split_chapters() consumes the boundary heading into Chapter.title, so the title

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from audiobook_creator.core.job import Job
 from audiobook_creator.models import (
     Block,
@@ -88,3 +90,43 @@ def test_run_stage_writes_body_chapters_only(tmp_path: Path):
     files = sorted(job.processed_dir.glob("*.txt"))
     assert [f.name for f in files] == ["000.txt"]
     assert "Hello there." in files[0].read_text(encoding="utf-8")
+
+
+def _write_chapters(job: Job, chapters: list[Chapter]) -> None:
+    for chapter in chapters:
+        path = job.chapters_dir / f"{chapter.index:03d}.json"
+        path.write_text(chapter.model_dump_json(), encoding="utf-8")
+
+
+def test_chapters_without_any_prose_raise(tmp_path: Path):
+    # Title lines alone must not satisfy the guard: otherwise a book whose chapters
+    # are all tables burns a full TTS run to narrate nothing but chapter titles.
+    job = Job.create(tmp_path, JobConfig(source="x.epub"))
+    _write_chapters(
+        job,
+        [
+            Chapter(index=0, title="One", blocks=[Block(type=BlockType.TABLE, text="Year 2026")]),
+            Chapter(index=1, title="Two", blocks=[Block(type=BlockType.TABLE, text="Year 2027")]),
+        ],
+    )
+    with pytest.raises(ValueError, match="speakable"):
+        run_stage(job)
+
+
+def test_title_only_chapter_still_written_beside_a_prose_chapter(tmp_path: Path):
+    job = Job.create(tmp_path, JobConfig(source="x.epub"))
+    _write_chapters(
+        job,
+        [
+            Chapter(
+                index=0,
+                title="One",
+                blocks=[Block(type=BlockType.PARAGRAPH, text="Hello there.")],
+            ),
+            Chapter(index=1, title="Two", blocks=[Block(type=BlockType.TABLE, text="Year 2026")]),
+        ],
+    )
+    run_stage(job)
+    files = sorted(job.processed_dir.glob("*.txt"))
+    assert [f.name for f in files] == ["000.txt", "001.txt"]
+    assert files[1].read_text(encoding="utf-8") == "Two. [[pause]]"
