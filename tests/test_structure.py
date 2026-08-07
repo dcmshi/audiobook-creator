@@ -59,6 +59,27 @@ def test_classify_matter_keywords():
     assert classify_matter("Some Odd Title") is Matter.BODY  # ambiguous -> body
 
 
+def test_classify_matter_does_not_swallow_body_titles():
+    # A body chapter misfiled as front/back matter is deleted by the process stage's
+    # body-only filter, which is the one failure direction the spec forbids.
+    for title in (
+        "Notes from the Field",
+        "Notes on a Scandal",
+        "Index Funds Explained",
+        "Indexing Strategies",
+        "Copyright Law in Practice",
+        "Dedication and Discipline",
+        "Prefaces I Have Known",
+        "References to Popular Culture",
+    ):
+        assert classify_matter(title) is Matter.BODY, title
+
+
+def test_classify_matter_still_catches_jargon_prefixes():
+    assert classify_matter("Appendix A: Data") is Matter.BACK
+    assert classify_matter("Table of Contents") is Matter.FRONT
+
+
 def test_run_stage_writes_chapter_files(tmp_path: Path):
     job = Job.create(tmp_path, JobConfig(source="x.epub"))
     doc = _doc([_h("One"), _p("a"), _h("References"), _p("Doe 2026")])

@@ -1,20 +1,30 @@
 from audiobook_creator.models import Block, BlockType, Chapter, Document, Matter
 
-_FRONT_KEYWORDS = {
-    "contents", "table of contents", "title page", "copyright", "dedication",
-    "preface", "foreword", "epigraph", "half title", "about this book",
+# Ordinary English words must match the whole title. "Notes on a Scandal" and
+# "Index Funds Explained" are body chapters, and misfiling one here deletes it:
+# the process stage narrates body matter only.
+_FRONT_EXACT = {
+    "contents", "copyright", "dedication", "preface", "foreword", "epigraph",
 }
-_BACK_KEYWORDS = {
-    "references", "bibliography", "index", "acknowledgments", "acknowledgements",
-    "appendix", "notes", "glossary", "about the author", "endnotes",
+_BACK_EXACT = {
+    "references", "index", "notes", "glossary", "endnotes",
+}
+
+# Publishing jargon, implausible as the opening words of a body chapter title, so
+# these may match a prefix and still catch "Appendix A: Data".
+_FRONT_PREFIX = {
+    "table of contents", "title page", "half title", "about this book",
+}
+_BACK_PREFIX = {
+    "bibliography", "acknowledgments", "acknowledgements", "appendix", "about the author",
 }
 
 
 def classify_matter(title: str) -> Matter:
     t = title.strip().lower()
-    if any(t == k or t.startswith(k) for k in _BACK_KEYWORDS):
+    if t in _BACK_EXACT or any(t.startswith(k) for k in _BACK_PREFIX):
         return Matter.BACK
-    if any(t == k or t.startswith(k) for k in _FRONT_KEYWORDS):
+    if t in _FRONT_EXACT or any(t.startswith(k) for k in _FRONT_PREFIX):
         return Matter.FRONT
     return Matter.BODY  # ambiguous -> body: extra audio beats missing content
 
