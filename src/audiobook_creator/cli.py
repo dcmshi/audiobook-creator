@@ -1,3 +1,4 @@
+import logging
 import shutil
 from pathlib import Path
 
@@ -17,12 +18,29 @@ _STATUS_ICON = {
 }
 
 
+@app.callback()
+def _main() -> None:
+    # Without this the stages' warnings — notably synthesize's "N of M chunks failed" —
+    # have no handler and never reach the user.
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+
+
 def _load_job(jobs_dir: Path, job_id: str) -> Job:
     try:
         return Job.load(jobs_dir, job_id)
     except FileNotFoundError:
         typer.echo(f"error: no job {job_id!r} under {jobs_dir}", err=True)
         raise typer.Exit(code=2) from None
+
+
+def _run_pipeline(job: Job, from_stage: str | None = None) -> None:
+    try:
+        engine.run(job, from_stage=from_stage)
+    except Exception as exc:  # noqa: BLE001 - any stage error is a user-facing message
+        # Stage failures carry text written to be read ("TTS failed for chapter(s) 001").
+        # Letting them propagate buries that text in a traceback panel.
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
 
 
 @app.command()
@@ -54,7 +72,7 @@ def convert(
     )
     job = Job.create(jobs_dir, config)
     typer.echo(f"job {job.state.id}: {source}")
-    engine.run(job)
+    _run_pipeline(job)
     for out in sorted(job.output_dir.iterdir()):
         if out.suffix in (".m4b", ".mp3"):
             typer.echo(f"  -> {out}")
@@ -69,7 +87,7 @@ def resume(
     ),
 ) -> None:
     job = _load_job(jobs_dir, job_id)
-    engine.run(job, from_stage=from_stage)
+    _run_pipeline(job, from_stage=from_stage)
     typer.echo(f"job {job_id} complete")
 
 

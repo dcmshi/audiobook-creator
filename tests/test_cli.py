@@ -63,6 +63,23 @@ def test_convert_rejects_missing_file(tmp_path: Path):
     assert result.exit_code != 0
 
 
+def test_convert_reports_stage_failure_without_a_traceback(make_epub, tmp_path: Path):
+    result = runner.invoke(
+        app,
+        [
+            "convert",
+            str(make_epub()),
+            "--tts-backend",
+            "nope",
+            "--jobs-dir",
+            str(tmp_path / "jobs"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "unknown TTS backend" in result.output  # the stage's own wording reaches the user
+    assert "Traceback" not in result.output
+
+
 def test_resume_unknown_job_id_exits_cleanly(tmp_path: Path):
     jobs_dir = tmp_path / "jobs"
     jobs_dir.mkdir()
