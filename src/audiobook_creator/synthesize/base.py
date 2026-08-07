@@ -27,15 +27,23 @@ def register_backend(name: str, factory: Callable[[], TTSBackend], is_local: boo
     _REGISTRY[name] = (factory, is_local)
 
 
-def get_backend(name: str, local_only: bool = False) -> TTSBackend:
+def check_backend(name: str, local_only: bool = False) -> None:
+    """Validate the name and the privacy gate without constructing the backend.
+
+    Separate from get_backend so a preflight can reject a bad choice without paying to
+    load a TTS model.
+    """
     if name not in _REGISTRY:
         raise ValueError(f"unknown TTS backend {name!r}; known: {sorted(_REGISTRY)}")
-    factory, is_local = _REGISTRY[name]
-    if local_only and not is_local:
+    if local_only and not _REGISTRY[name][1]:
         raise PrivacyError(
             f"backend {name!r} sends text to a network service, but this job is local_only"
         )
-    return factory()
+
+
+def get_backend(name: str, local_only: bool = False) -> TTSBackend:
+    check_backend(name, local_only)
+    return _REGISTRY[name][0]()
 
 
 def _hard_split(sentence: str, max_chars: int) -> list[str]:

@@ -1,5 +1,7 @@
 import logging
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import typer
@@ -7,6 +9,8 @@ import typer
 from audiobook_creator.core import engine
 from audiobook_creator.core.job import Job
 from audiobook_creator.models import JobConfig, Mode, StageStatus
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="Turn PDFs and EPUBs into audiobooks.", no_args_is_help=True)
 
@@ -35,14 +39,48 @@ def _load_job(jobs_dir: Path, job_id: str) -> Job:
         raise typer.Exit(code=2) from None
 
 
-def _run_pipeline(job: Job, from_stage: str | None = None) -> None:
+@contextmanager
+def _clean_errors() -> Iterator[None]:
+    """Report a failure as one line instead of a traceback panel.
+
+    Stage and backend errors carry text written to be read ("TTS failed for chapter(s)
+    001"); letting them propagate buries that text.
+    """
     try:
-        engine.run(job, from_stage=from_stage)
+        yield
+    except typer.Exit:
+        raise
     except Exception as exc:  # noqa: BLE001 - any stage error is a user-facing message
-        # Stage failures carry text written to be read ("TTS failed for chapter(s) 001").
-        # Letting them propagate buries that text in a traceback panel.
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=1) from None
+
+
+def _run_pipeline(job: Job, from_stage: str | None = None) -> None:
+    with _clean_errors():
+        engine.run(job, from_stage=from_stage)
+
+
+def _preflight(mode: Mode, tts_backend: str, local_only: bool) -> None:
+    """Reject an unusable job before Job.create, so failure costs a second, not a stage run."""
+    from audiobook_creator.synthesize.base import check_backend
+    from audiobook_creator.synthesize.kokoro import model_files_status
+
+    if mode is not Mode.VERBATIM:
+        typer.echo(
+            f"error: mode {mode.value!r} is not implemented yet; only 'verbatim' works today",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    try:
+        check_backend(tts_backend, local_only=local_only)
+    except Exception as exc:  # noqa: BLE001 - unknown name or privacy block, both user-facing
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from None
+    if tts_backend == "kokoro":
+        status = model_files_status()
+        if status != "OK":
+            typer.echo(f"error: {status}", err=True)
+            raise typer.Exit(code=2)
 
 
 @app.command()
@@ -64,6 +102,7 @@ def convert(
         if fmt not in ("mp3", "m4b"):
             typer.echo(f"error: unknown format {fmt!r} (use mp3 or m4b)", err=True)
             raise typer.Exit(code=2)
+    _preflight(mode, tts_backend, local_only)
     config = JobConfig(
         source=source,
         mode=mode,
@@ -100,7 +139,13 @@ def jobs(jobs_dir: Path = typer.Option(Path("jobs"), "--jobs-dir")) -> None:
         typer.echo("no jobs")
         return
     for job_id in ids:
-        job = _load_job(jobs_dir, job_id)
+        try:
+            job = Job.load(jobs_dir, job_id)
+        except (OSError, ValueError) as exc:
+            # One unreadable job must not hide every other job in the list.
+            logger.debug("could not read job %s: %s", job_id, exc)
+            typer.echo(f"{job_id}    corrupt job.json")
+            continue
         stages = " ".join(
             f"{name}:{_STATUS_ICON[status]}" for name, status in job.state.stages.items()
         )
@@ -128,10 +173,11 @@ def preview(
         raise typer.Exit(code=2)
     text = processed[0].read_text(encoding="utf-8").replace("[[pause]]", " ")[:PREVIEW_CHARS]
     cfg = job.state.config
-    backend = get_backend(cfg.tts_backend, local_only=cfg.local_only)
-    pcm = b"".join(backend.synthesize(c, cfg.voice) for c in chunk_text(text))
     out = job.output_dir / "preview.wav"
-    write_wav(out, pcm, backend.sample_rate)
+    with _clean_errors():
+        backend = get_backend(cfg.tts_backend, local_only=cfg.local_only)
+        pcm = b"".join(backend.synthesize(c, cfg.voice) for c in chunk_text(text))
+        write_wav(out, pcm, backend.sample_rate)
     typer.echo(f"  -> {out}")
 
 
