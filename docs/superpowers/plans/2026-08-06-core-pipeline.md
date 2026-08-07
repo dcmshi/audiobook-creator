@@ -1618,12 +1618,9 @@ from audiobook_creator.synthesize.stub import StubBackend
 def test_chunk_respects_sentences():
     text = "First sentence here. Second one is also short. Third."
     chunks = chunk_text(text, max_chars=45)
-    assert chunks == ["First sentence here. Second one is also short.", "Third."][:len(chunks)] or all(
-        len(c) <= 45 for c in chunks
-    )
-    # invariant form of the assertion:
     assert all(len(c) <= 45 for c in chunks)
-    assert " ".join(chunks).replace("  ", " ") == text
+    assert all(c.endswith((".", "!", "?")) for c in chunks)  # sentence boundaries only
+    assert " ".join(chunks) == text
 
 
 def test_chunk_hard_splits_monster_sentence():
@@ -1999,7 +1996,7 @@ git commit -m "feat: synthesize stage with chunk cache, retry-to-silence, and pa
 
 **Files:**
 - Create: `src/audiobook_creator/package/__init__.py` (empty), `src/audiobook_creator/package/ffmpeg.py`, `src/audiobook_creator/package/stage.py`
-- Modify: `tests/conftest.py` (add ffmpeg skip marker helper)
+- Create: `tests/helpers.py` (ffmpeg skip marker)
 - Test: `tests/test_package_stage.py`
 
 **Interfaces:**
@@ -2013,12 +2010,14 @@ git commit -m "feat: synthesize stage with chunk cache, retry-to-silence, and pa
   - `run_stage(job: Job) -> None` — reads formats from config; writes `output/NNN - <safe title>.mp3` per chapter and/or `output/<safe book title>.m4b`.
   - `safe_filename(name: str) -> str` — strips `<>:"/\|?*` and trims.
 
-- [ ] **Step 1: Add ffmpeg skip helper to conftest**
+- [ ] **Step 1: Add ffmpeg skip helper**
 
-Append to `tests/conftest.py`:
+Create `tests/helpers.py` (imported as `from helpers import ...` — pytest puts `tests/` on `sys.path`; `tests.conftest` is NOT importable without an `__init__.py`):
 
 ```python
 import shutil
+
+import pytest
 
 requires_ffmpeg = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
@@ -2047,7 +2046,7 @@ from audiobook_creator.models import (
 from audiobook_creator.package.ffmpeg import safe_filename, write_ffmetadata
 from audiobook_creator.package.stage import run_stage
 from audiobook_creator.synthesize.base import write_wav
-from tests.conftest import requires_ffmpeg
+from helpers import requires_ffmpeg
 
 
 def test_safe_filename():
@@ -2246,7 +2245,7 @@ Expected: 4 PASSED (or 2 PASSED + 2 SKIPPED without ffmpeg — on the dev machin
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/audiobook_creator/package tests/test_package_stage.py tests/conftest.py
+git add src/audiobook_creator/package tests/test_package_stage.py tests/helpers.py
 git commit -m "feat: package stage - per-chapter MP3s and M4B with chapter markers via ffmpeg"
 ```
 
@@ -2276,7 +2275,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from audiobook_creator.cli import app
-from tests.conftest import requires_ffmpeg
+from helpers import requires_ffmpeg
 
 runner = CliRunner()
 
