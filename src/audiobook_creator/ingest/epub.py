@@ -78,17 +78,24 @@ def _extract_cover(
     return None
 
 
+_BLOCK_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "table", "li"]
+
+
 def _blocks_from_xhtml(xhtml: str) -> list[Block]:
     soup = BeautifulSoup(xhtml, "html.parser")
     body = soup.find("body")
     if body is None:
         return []
     blocks: list[Block] = []
-    for el in body.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "table"]):
+    for el in body.find_all(_BLOCK_TAGS):
+        # find_all recurses, so a <p> inside a <td> or an <li> is already carried by
+        # its ancestor's flattened text; emitting it again narrates the prose twice.
+        if el.find_parent(_BLOCK_TAGS) is not None:
+            continue
         text = " ".join(el.get_text(separator=" ").split())
         if not text:
             continue
-        if el.name == "p":
+        if el.name in ("p", "li"):
             blocks.append(Block(type=BlockType.PARAGRAPH, text=text))
         elif el.name == "table":
             blocks.append(Block(type=BlockType.TABLE, text=text))
