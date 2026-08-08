@@ -1,7 +1,7 @@
 # Audiobook Creator — Design Spec
 
 **Date:** 2026-08-06
-**Status:** Approved (brainstorm complete)
+**Status:** Approved (brainstorm complete). Plan 1 shipped 2026-08-07 — see Implementation Status at the end of this document.
 
 ## Purpose
 
@@ -136,3 +136,21 @@ abc jobs | abc resume <id> | abc preview <id>   # preview: first ~30s of chapter
 - Exact LLM prompt designs per mode (iterate against fixtures)
 - Kokoro voice default and DirectML vs CPU execution-provider selection
 - Whether Docling's HTML fetch suffices for paywalled/JS-heavy articles (fallback: accept saved HTML/PDF)
+
+## Implementation Status (updated 2026-08-07)
+
+**Plan 1 — core pipeline + CLI: SHIPPED** (main @ 690c27c; plan: `docs/superpowers/plans/2026-08-06-core-pipeline.md`). Working: EPUB/PDF → verbatim narration → per-chapter MP3s / M4B with chapters via `abc convert`, Kokoro-ONNX local TTS, resumable jobs, 99 hermetic tests + docling/kokoro-marked integration tests. Verified end-to-end on real hardware.
+
+Deviations and additions relative to this spec, all review-adjudicated:
+
+- **EPUB is parsed natively** (zipfile + BeautifulSoup), not via Docling — keeps the base install torch-free; Docling serves PDF/DOCX/HTML behind the `[pdf]` extra. Docling was verified against the live library (tables via `export_to_markdown`, heading rank from `item.level`).
+- **Chapter include/exclude** shipped as a documented manual workaround (edit `"matter"` in `chapters/NNN.json`, `resume --from-stage process`) rather than CLI flags; flags deferred to Plan 2/3.
+- **Structure-stage LLM tiebreaker** deferred to Plan 2; heuristics use exact-match for common-word keywords (prefix only for unambiguous jargon) and ambiguous → body.
+- **Synthesize failure semantics exceed spec:** failure silence is never cached; degraded chapters are recorded and auto-rebuilt on the next run; a wholly-failed chapter fails the stage rather than shipping silence.
+- **`--from-stage synthesize` honors edited processed text** via mtime-based rebuild (the spec's "human-editable between stages" promise).
+- **Added beyond spec:** `abc preview` (~30s audition), `abc doctor`, atomic job.json writes, convert preflight (mode/backend validated before any work).
+- **Mode status:** `verbatim` fully working (rule-based path; LLM path is Plan 2). `rewrite`/`podcast` rejected at preflight until Plan 2. Podcast speaker markup contract: `[[speaker:N]]` line prefixes.
+- **Known-deferred minors** are ledgered in the Plan 1 final review (see git history); notable for Plan 2: figure image extraction (`assets_dir` unused on the docling path), EPUB2 cover detection, cache key omits sample_rate.
+
+**Plan 2 — LLM layer: planned** (`docs/superpowers/plans/2026-08-07-llm-layer.md`).
+**Plan 3 — web UI: planned** (`docs/superpowers/plans/2026-08-07-web-ui.md`).
