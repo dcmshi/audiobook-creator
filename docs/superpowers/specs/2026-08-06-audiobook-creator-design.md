@@ -152,5 +152,5 @@ Deviations and additions relative to this spec, all review-adjudicated:
 - **Mode status:** `verbatim` fully working (rule-based path; LLM path is Plan 2). `rewrite`/`podcast` rejected at preflight until Plan 2. Podcast speaker markup contract: `[[speaker:N]]` line prefixes.
 - **Known-deferred minors** are ledgered in the Plan 1 final review (see git history); notable for Plan 2: figure image extraction (`assets_dir` unused on the docling path), EPUB2 cover detection, cache key omits sample_rate.
 
-**Plan 2 — LLM layer: planned** (`docs/superpowers/plans/2026-08-07-llm-layer.md`). Network LLM providers are Anthropic (default) and Kimi/Moonshot (added 2026-08-08; OpenAI-compatible API), with Ollama for `local_only` — superseding this spec's "Anthropic/Gemini" wording above.
+**Plan 2 — LLM layer: planned** (`docs/superpowers/plans/2026-08-07-llm-layer.md`). Providers: Ollama (local, the only implicit default), Anthropic, and Kimi/Moonshot (both added as explicit per-job opt-in paid providers, 2026-08-08) — superseding this spec's "frontier API by default" and "Anthropic/Gemini" wording above. Rationale: chat subscriptions at both vendors exclude API billing, so paid API calls must never happen implicitly.
 **Plan 3 — web UI: planned** (`docs/superpowers/plans/2026-08-07-web-ui.md`).
