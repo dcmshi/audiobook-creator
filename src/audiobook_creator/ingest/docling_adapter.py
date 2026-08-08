@@ -61,7 +61,7 @@ def _table_text(item, dl_doc) -> str:
         return ""
     try:
         markdown = export(dl_doc) or ""
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - third-party export; losing one table beats aborting
         logger.warning("table markdown export failed; table content dropped: %s", exc)
         return ""
     return _markdown_table_to_prose(markdown)
