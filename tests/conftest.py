@@ -70,6 +70,18 @@ _REFS = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
+@pytest.fixture(autouse=True)
+def no_implicit_llm(monkeypatch):
+    """Keep the suite hermetic and deterministic.
+
+    The process stage resolves an LLM on its own now, and this project's documented dev setup
+    runs Ollama locally — so without this the stage tests make real inference calls, taking
+    ~50s and making assertions depend on model output. Tests that exercise the LLM path
+    monkeypatch resolve_llm (or delenv this) explicitly.
+    """
+    monkeypatch.setenv("ABC_LLM", "none")
+
+
 @pytest.fixture
 def make_epub(tmp_path: Path):
     def _make() -> Path:
