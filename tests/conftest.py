@@ -82,11 +82,17 @@ def no_implicit_llm(monkeypatch):
     monkeypatch.setenv("ABC_LLM", "none")
 
 
-# ch1 with a figure in it. The <img> sits directly under <body>: an <img> nested inside a
-# captured block is skipped by the ancestor guard, so keep it a sibling of the paragraphs.
+# ch1 with a figure in it: once as a bare sibling of the paragraphs, once wrapped in the
+# text-free <p class="image"> that EPUB conversion tools commonly emit.
 _CH1_WITH_IMG = _CH1.replace(
     "<p>It was a dark and stormy night.</p>",
     '<p>It was a dark and stormy night.</p>\n<img src="pic.png" alt="A storm chart"/>',
+)
+
+_CH1_WITH_WRAPPED_IMG = _CH1.replace(
+    "<p>It was a dark and stormy night.</p>",
+    '<p>It was a dark and stormy night.</p>\n'
+    '<p class="image"><img src="pic.png" alt="A storm chart"/></p>',
 )
 
 # EPUB2 names the cover indirectly: a <meta name="cover"> pointing at a manifest id, with no
@@ -133,6 +139,7 @@ def _epub_with_extra_files(
     images: dict[str, bytes] | None = None,
     epub2_cover: bool = False,
     epub3_cover: bool = False,
+    wrap_img: bool = False,
 ) -> Path:
     """The make_epub book plus optional image entries, an <img> in ch1, or either cover style."""
     extra = dict(images or {})
@@ -140,9 +147,12 @@ def _epub_with_extra_files(
     if epub2_cover or epub3_cover:
         opf = _OPF_EPUB2_COVER if epub2_cover else _OPF_EPUB3_COVER
         extra.setdefault("OEBPS/cover.jpg", b"\xff\xd8\xffJPEGBYTES")
+    ch1 = _CH1
+    if images:
+        ch1 = _CH1_WITH_WRAPPED_IMG if wrap_img else _CH1_WITH_IMG
     return _build_epub(
         tmp_path / "extra-book.epub",
-        ch1=_CH1_WITH_IMG if images else _CH1,
+        ch1=ch1,
         opf=opf,
         extra=extra,
     )

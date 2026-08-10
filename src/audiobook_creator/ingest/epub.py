@@ -119,6 +119,25 @@ _BLOCK_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "table", "li"]
 _CAPTURED_TAGS = [*_BLOCK_TAGS, "img"]
 
 
+def _figure_block(img, save_image: Callable[[str], str | None] | None) -> Block | None:
+    """A FIGURE for this <img>, or None when its text is already narrated by an ancestor.
+
+    `<p class="image"><img/></p>` is a dominant real-world wrapper, and such a wrapper
+    flattens to empty text — it is skipped as a block, so the figure would vanish with it.
+    A wrapper carrying real prose keeps the anti-duplication guard instead: that prose is
+    narrated from the block, and the image stays folded into it.
+    """
+    wrapper = img.find_parent(_BLOCK_TAGS)
+    if wrapper is not None and wrapper.get_text(separator=" ").strip():
+        return None
+    # A void element, so there is nothing to flatten: the alt text is the caption.
+    return Block(
+        type=BlockType.FIGURE,
+        text=" ".join(img.get("alt", "").split()),
+        image_path=save_image(img.get("src", "")) if save_image else None,
+    )
+
+
 def _blocks_from_xhtml(
     xhtml: str, save_image: Callable[[str], str | None] | None = None
 ) -> list[Block]:
@@ -128,20 +147,14 @@ def _blocks_from_xhtml(
         return []
     blocks: list[Block] = []
     for el in body.find_all(_CAPTURED_TAGS):
+        if el.name == "img":
+            figure = _figure_block(el, save_image)
+            if figure is not None:
+                blocks.append(figure)
+            continue
         # find_all recurses, so a <p> inside a <td> or an <li> is already carried by
         # its ancestor's flattened text; emitting it again narrates the prose twice.
         if el.find_parent(_BLOCK_TAGS) is not None:
-            continue
-        if el.name == "img":
-            # Void element, so there is nothing to flatten: the alt text is the caption.
-            src = el.get("src", "")
-            blocks.append(
-                Block(
-                    type=BlockType.FIGURE,
-                    text=" ".join(el.get("alt", "").split()),
-                    image_path=save_image(src) if save_image else None,
-                )
-            )
             continue
         text = " ".join(el.get_text(separator=" ").split())
         if not text:

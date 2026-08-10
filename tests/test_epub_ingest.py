@@ -100,3 +100,38 @@ def test_epub3_cover_property_still_detected(tmp_path: Path):
     doc = ingest_epub(epub, tmp_path / "assets")
     assert doc.meta.cover_path is not None
     assert Path(doc.meta.cover_path).exists()
+
+
+_FIGURE_XHTML = """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Figures</title></head>
+<body>
+<p class="image"><img src="wrapped.png" alt="Wrapped figure"/></p>
+<p>Prose with an inline mark <img src="inline.png" alt="Inline figure"/> continues.</p>
+<figure><img src="tagged.png" alt="Tagged figure"/></figure>
+</body></html>
+"""
+
+
+def test_text_free_wrapper_still_yields_figure():
+    blocks = _blocks_from_xhtml(_FIGURE_XHTML, lambda src: f"/assets/{src}")
+    figures = [b for b in blocks if b.type is BlockType.FIGURE]
+    assert [b.text for b in figures] == ["Wrapped figure", "Tagged figure"]
+    assert figures[0].image_path == "/assets/wrapped.png"
+
+
+def test_image_inside_prose_block_is_not_duplicated():
+    blocks = _blocks_from_xhtml(_FIGURE_XHTML, lambda src: f"/assets/{src}")
+    paragraphs = [b.text for b in blocks if b.type is BlockType.PARAGRAPH]
+    assert any("inline mark" in text for text in paragraphs)
+    assert all(b.text != "Inline figure" for b in blocks)  # narrated once, via its paragraph
+
+
+def test_wrapped_img_extracts_asset_end_to_end(tmp_path: Path):
+    epub = _epub_with_extra_files(
+        tmp_path, images={"OEBPS/pic.png": b"\x89PNG\r\n\x1a\nxx"}, wrap_img=True
+    )
+    doc = ingest_epub(epub, tmp_path / "assets")
+    figs = [b for b in doc.blocks if b.type is BlockType.FIGURE]
+    assert len(figs) == 1
+    assert figs[0].text == "A storm chart"
+    assert Path(figs[0].image_path).exists()
