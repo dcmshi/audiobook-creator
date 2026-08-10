@@ -1,0 +1,69 @@
+import base64
+import json
+import os
+from pathlib import Path
+from urllib import request
+
+from audiobook_creator.process.llm.base import LLMError
+
+_DEFAULT_MODEL = "kimi-k2.6"
+_MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+
+
+class KimiClient:
+    name = "kimi"
+
+    def __init__(self) -> None:
+        key = os.environ.get("MOONSHOT_API_KEY", "").strip()
+        if not key:
+            raise LLMError("no Kimi credentials found (set MOONSHOT_API_KEY, or drop --llm kimi)")
+        self._key = key
+        self.base = os.environ.get("ABC_KIMI_URL", "https://api.moonshot.ai/v1").rstrip("/")
+        self.model = os.environ.get("ABC_KIMI_MODEL", _DEFAULT_MODEL)
+
+    def _chat(self, messages: list[dict], max_tokens: int) -> str:
+        payload = json.dumps(
+            {
+                "model": self.model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "stream": False,
+            }
+        ).encode("utf-8")
+        req = request.Request(
+            f"{self.base}/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._key}",
+            },
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=600) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except OSError as exc:  # HTTPError subclasses OSError: auth and rate-limit land here too
+            raise LLMError(f"Kimi call failed: {exc}") from exc
+        choices = data.get("choices") or []
+        text = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
+        if not text.strip():
+            raise LLMError("Kimi returned no text")
+        return text
+
+    def complete(self, user: str, *, system: str | None = None, max_tokens: int = 2048) -> str:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user})
+        return self._chat(messages, max_tokens)
+
+    def describe_image(self, image_path: Path, prompt: str, *, max_tokens: int = 1024) -> str:
+        media_type = _MEDIA_TYPES.get(image_path.suffix.lower())
+        if media_type is None:
+            raise LLMError(f"unsupported image type: {image_path.suffix}")
+        data = base64.standard_b64encode(image_path.read_bytes()).decode("ascii")
+        content = [
+            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{data}"}},
+            {"type": "text", "text": prompt},
+        ]
+        return self._chat([{"role": "user", "content": content}], max_tokens)
