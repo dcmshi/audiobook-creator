@@ -87,3 +87,51 @@ def test_stage_refuses_rewrite_without_a_client(tmp_path: Path, monkeypatch):
     (job.chapters_dir / "000.json").write_text(ch.model_dump_json(), encoding="utf-8")
     with pytest.raises(RuntimeError, match="--llm"):
         process_stage.run_stage(job)
+
+
+class EchoingLLM(ScriptedLLM):
+    """Returns prose that leaks input-side markers and un-verbalized symbols."""
+
+    def complete(self, user, *, system=None, max_tokens=2048):
+        return (
+            "[TABLE] Growth reached 40% by 2026. [[pause]] "
+            "[FIGURE fig-000] The figure shows a rise.\n\n"
+            "A second paragraph [[TABLE]] with strays ]] and Fig. 2 nearby."
+        )
+
+
+def test_pause_survives_the_rules_pass_and_symbols_are_spoken(tmp_path: Path):
+    out = render_rewrite(_chapter(tmp_path), EchoingLLM(), tmp_path / "cache")
+    assert "[[pause]]" in out  # the one marker the prompt allows must survive normalize
+    assert "40 percent" in out  # rules caught what the model left as "40%"
+    assert "Figure 2" in out  # and the rest of the rule set applies too
+
+
+def test_leaked_markers_are_stripped(tmp_path: Path):
+    out = render_rewrite(_chapter(tmp_path), EchoingLLM(), tmp_path / "cache")
+    body = out.split("[[pause]]", 1)[1]  # drop the deterministic title frame
+    assert "[TABLE]" not in body
+    assert "[FIGURE" not in body
+    assert "]]" not in body.replace("[[pause]]", "")
+    assert "[[" not in body.replace("[[pause]]", "")
+
+
+def test_paragraph_breaks_survive_the_rules_pass(tmp_path: Path):
+    out = render_rewrite(_chapter(tmp_path), EchoingLLM(), tmp_path / "cache")
+    assert "A second paragraph" in out
+    assert "\n\nA second paragraph" in out  # normalize must not weld paragraphs together
+
+
+def test_stage_accepts_table_only_chapter_in_rewrite(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        llm_pkg, "resolve_llm", lambda *, local_only, use_llm, provider=None: ScriptedLLM()
+    )
+    job = Job.create(tmp_path, JobConfig(source="x.epub", mode=Mode.REWRITE))
+    ch = Chapter(
+        index=0,
+        title="Data",
+        blocks=[Block(type=BlockType.TABLE, text="Year, Growth. 2026, 40.")],
+    )
+    (job.chapters_dir / "000.json").write_text(ch.model_dump_json(), encoding="utf-8")
+    process_stage.run_stage(job)  # must not raise: the table is what rewrite verbalizes
+    assert (job.processed_dir / "000.txt").read_text(encoding="utf-8").strip()

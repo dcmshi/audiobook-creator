@@ -50,6 +50,8 @@ def _make_renderer(job: Job) -> Callable[[Chapter], str]:
 
 def run_stage(job: Job) -> None:
     render = _make_renderer(job)
+    # Rewrite verbalizes tables and figures, so they count towards "this book has narration".
+    include_visual = job.state.config.mode is Mode.REWRITE
     job.processed_dir.mkdir(parents=True, exist_ok=True)
     written = 0
     # Every titled chapter renders a title line, so counting files cannot tell us
@@ -62,7 +64,7 @@ def run_stage(job: Job) -> None:
         text = render(chapter)
         if not text.strip():
             continue
-        any_prose = any_prose or has_speakable_blocks(chapter)
+        any_prose = any_prose or has_speakable_blocks(chapter, include_visual=include_visual)
         (job.processed_dir / f"{chapter.index:03d}.txt").write_text(text, encoding="utf-8")
         written += 1
     if written == 0 or not any_prose:

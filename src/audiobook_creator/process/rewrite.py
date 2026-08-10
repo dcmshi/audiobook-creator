@@ -35,8 +35,30 @@ FIGURE_PROMPT = (
 _WINDOW_LIMIT = 6000
 _WINDOW_MAX_TOKENS = 8192
 
-# The prompt allows a literal [[pause]]; any other [[ is scaffolding the TTS would read aloud.
-_STRAY_OPEN = re.compile(r"\[\[(?!pause\]\])")
+# [[pause]] is the one marker the prompt allows through; everything else is scaffolding the
+# TTS would read aloud. Parked behind a sentinel first so cleanup order cannot damage it.
+_PAUSE_SENTINEL = "\x00pause\x00"
+# [TABLE] / [FIGURE fig-000] are input-side annotations. If the model echoes one, the prose it
+# annotated is already there, so the marker is pure noise. Matches one or two brackets.
+_INPUT_MARKER = re.compile(r"\[\[?(?:TABLE|FIGURE)\b[^\]]*\]\]?")
+_STRAY_BRACKETS = re.compile(r"\[\[|\]\]")
+
+
+def _strip_markers(text: str) -> str:
+    text = text.replace(PAUSE, _PAUSE_SENTINEL)
+    text = _INPUT_MARKER.sub("", text)
+    text = _STRAY_BRACKETS.sub("", text)
+    return text.replace(_PAUSE_SENTINEL, PAUSE)
+
+
+def _normalize_prose(text: str) -> str:
+    """Apply the rule pass the model's output never went through.
+
+    Per paragraph, because normalize() collapses every run of whitespace — over a whole
+    window it would weld the model's paragraphs into one block.
+    """
+    paragraphs = (normalize(part) for part in text.split("\n\n"))
+    return "\n\n".join(part for part in paragraphs if part)
 
 
 def _cached_describe(client: LLMClient, cache_dir: Path, image_path: Path, caption: str) -> str:
@@ -155,7 +177,9 @@ def render_rewrite(chapter: Chapter, client: LLMClient, cache_dir: Path) -> str:
                 for i in window
                 if (normalized := normalize(items[i][2]))
             )
-        rewritten = _STRAY_OPEN.sub("", rewritten).strip()
+        # Markers first, then the rule pass: stripping leaves stray whitespace that
+        # normalize() tidies, and normalize() would otherwise run over scaffolding text.
+        rewritten = _normalize_prose(_strip_markers(rewritten))
         if rewritten:
             parts.append(rewritten)
     return "\n\n".join(parts)
