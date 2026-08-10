@@ -56,6 +56,8 @@ class JobConfig(BaseModel):
     voice: str = "af_heart"
     local_only: bool = False
     use_llm: bool = True
+    # None = local-first default; "anthropic"/"kimi"/"ollama" force one
+    llm_provider: str | None = None
     formats: list[str] = ["m4b"]  # any of: "mp3", "m4b"
 
 

@@ -4,11 +4,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
+# Shared contract: callers keep importing PrivacyError from this module.
+from audiobook_creator.core.privacy import PrivacyError
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
-
-
-class PrivacyError(RuntimeError):
-    """Raised when a job flagged local_only requests a network backend."""
 
 
 class TTSBackend(Protocol):
