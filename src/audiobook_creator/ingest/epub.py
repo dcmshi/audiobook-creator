@@ -12,6 +12,11 @@ from audiobook_creator.models import Block, BlockType, Document, DocumentMeta
 _CNT_NS = {"c": "urn:oasis:names:tc:opendocument:xmlns:container"}
 _OPF_NS = {"opf": "http://www.idpf.org/2007/opf", "dc": "http://purl.org/dc/elements/1.1/"}
 
+# A missing, corrupt, or truncated member, or an unwritable destination. Neither BadZipFile
+# nor EOFError is an OSError, so both need naming. An unreadable image costs its picture,
+# never the book.
+_ASSET_FAILURES = (KeyError, OSError, zipfile.BadZipFile, EOFError)
+
 
 def ingest_epub(path: Path, assets_dir: Path) -> Document:
     assets_dir.mkdir(parents=True, exist_ok=True)
@@ -48,7 +53,7 @@ def _save_asset(
     dest = assets_dir / f"fig-{index:03d}{Path(target).suffix or '.img'}"
     try:
         dest.write_bytes(zf.read(target))
-    except KeyError:
+    except _ASSET_FAILURES:
         return None
     return str(dest)
 
@@ -110,7 +115,7 @@ def _extract_cover(
     dest = assets_dir / f"cover{Path(href).suffix}"
     try:
         dest.write_bytes(zf.read(src))
-    except KeyError:
+    except _ASSET_FAILURES:
         return None
     return str(dest)
 

@@ -1,3 +1,4 @@
+import zipfile
 from pathlib import Path
 
 from conftest import _epub_with_extra_files
@@ -135,3 +136,33 @@ def test_wrapped_img_extracts_asset_end_to_end(tmp_path: Path):
     assert len(figs) == 1
     assert figs[0].text == "A storm chart"
     assert Path(figs[0].image_path).exists()
+
+
+def _read_failing_on(monkeypatch, needle: str, exc: Exception):
+    """Make ZipFile.read raise for one member, leaving every other read working."""
+    real_read = zipfile.ZipFile.read
+
+    def flaky_read(self, name, *args, **kwargs):
+        if str(name).endswith(needle):
+            raise exc
+        return real_read(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", flaky_read)
+
+
+def test_corrupt_image_entry_degrades_to_no_path(tmp_path: Path, monkeypatch):
+    epub = _epub_with_extra_files(tmp_path, images={"OEBPS/pic.png": b"\x89PNG\r\n\x1a\nxx"})
+    _read_failing_on(monkeypatch, "pic.png", zipfile.BadZipFile("Bad CRC-32 for 'pic.png'"))
+    doc = ingest_epub(epub, tmp_path / "assets")  # must not raise
+    figs = [b for b in doc.blocks if b.type is BlockType.FIGURE]
+    assert len(figs) == 1
+    assert figs[0].image_path is None
+    assert any(b.type is BlockType.PARAGRAPH for b in doc.blocks)  # rest of the book survived
+
+
+def test_corrupt_cover_entry_degrades_to_none(tmp_path: Path, monkeypatch):
+    epub = _epub_with_extra_files(tmp_path, epub3_cover=True)
+    _read_failing_on(monkeypatch, "cover.jpg", EOFError("truncated member"))
+    doc = ingest_epub(epub, tmp_path / "assets")  # must not raise
+    assert doc.meta.cover_path is None
+    assert any(b.type is BlockType.PARAGRAPH for b in doc.blocks)
