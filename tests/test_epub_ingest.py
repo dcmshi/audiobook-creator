@@ -1,3 +1,4 @@
+import logging
 import zipfile
 from pathlib import Path
 
@@ -150,19 +151,32 @@ def _read_failing_on(monkeypatch, needle: str, exc: Exception):
     monkeypatch.setattr(zipfile.ZipFile, "read", flaky_read)
 
 
-def test_corrupt_image_entry_degrades_to_no_path(tmp_path: Path, monkeypatch):
+def test_corrupt_image_entry_degrades_to_no_path(tmp_path: Path, monkeypatch, caplog):
     epub = _epub_with_extra_files(tmp_path, images={"OEBPS/pic.png": b"\x89PNG\r\n\x1a\nxx"})
     _read_failing_on(monkeypatch, "pic.png", zipfile.BadZipFile("Bad CRC-32 for 'pic.png'"))
-    doc = ingest_epub(epub, tmp_path / "assets")  # must not raise
+    with caplog.at_level(logging.WARNING):
+        doc = ingest_epub(epub, tmp_path / "assets")  # must not raise
+    # Degrading is right; degrading silently is not — this is Task 8's missing input.
+    assert "could not be extracted" in caplog.text
+    assert "pic.png" in caplog.text
     figs = [b for b in doc.blocks if b.type is BlockType.FIGURE]
     assert len(figs) == 1
     assert figs[0].image_path is None
     assert any(b.type is BlockType.PARAGRAPH for b in doc.blocks)  # rest of the book survived
 
 
-def test_corrupt_cover_entry_degrades_to_none(tmp_path: Path, monkeypatch):
+def test_corrupt_cover_entry_degrades_to_none(tmp_path: Path, monkeypatch, caplog):
     epub = _epub_with_extra_files(tmp_path, epub3_cover=True)
     _read_failing_on(monkeypatch, "cover.jpg", EOFError("truncated member"))
-    doc = ingest_epub(epub, tmp_path / "assets")  # must not raise
+    with caplog.at_level(logging.WARNING):
+        doc = ingest_epub(epub, tmp_path / "assets")  # must not raise
+    assert "cover.jpg" in caplog.text
     assert doc.meta.cover_path is None
     assert any(b.type is BlockType.PARAGRAPH for b in doc.blocks)
+
+
+def test_healthy_book_logs_no_asset_warning(tmp_path: Path, caplog):
+    epub = _epub_with_extra_files(tmp_path, images={"OEBPS/pic.png": b"\x89PNG\r\n\x1a\nxx"})
+    with caplog.at_level(logging.WARNING):
+        ingest_epub(epub, tmp_path / "assets")
+    assert "could not be extracted" not in caplog.text  # no crying wolf on a clean book

@@ -1,4 +1,5 @@
 import itertools
+import logging
 import posixpath
 import xml.etree.ElementTree as ET
 import zipfile
@@ -8,6 +9,8 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 
 from audiobook_creator.models import Block, BlockType, Document, DocumentMeta
+
+logger = logging.getLogger(__name__)
 
 _CNT_NS = {"c": "urn:oasis:names:tc:opendocument:xmlns:container"}
 _OPF_NS = {"opf": "http://www.idpf.org/2007/opf", "dc": "http://purl.org/dc/elements/1.1/"}
@@ -25,8 +28,9 @@ def ingest_epub(path: Path, assets_dir: Path) -> Document:
         opf_root = ET.fromstring(zf.read(opf_path).decode("utf-8"))
         opf_dir = posixpath.dirname(opf_path)
 
+        failures: list[str] = []
         meta = _metadata(opf_root)
-        meta.cover_path = _extract_cover(zf, opf_root, opf_dir, assets_dir)
+        meta.cover_path = _extract_cover(zf, opf_root, opf_dir, assets_dir, failures)
 
         blocks: list[Block] = []
         figures = itertools.count()
@@ -37,14 +41,29 @@ def ingest_epub(path: Path, assets_dir: Path) -> Document:
             # An <img src> resolves against its own document's directory, which is not
             # always the OPF's — bind it per spine item rather than reusing opf_dir.
             def save_image(src: str, _base: str = posixpath.dirname(full_href)) -> str | None:
-                return _save_asset(zf, _base, src, assets_dir, next(figures))
+                return _save_asset(zf, _base, src, assets_dir, next(figures), failures)
 
             blocks.extend(_blocks_from_xhtml(xhtml, save_image))
+    # One line per book rather than per asset: a corrupt archive tends to fail in bulk, and
+    # a silently image-less figure is exactly what leaves vision with nothing to describe.
+    if failures:
+        shown = ", ".join(failures[:5])
+        logger.warning(
+            "%d EPUB asset(s) could not be extracted; affected figures have no image (%s%s)",
+            len(failures),
+            shown,
+            ", ..." if len(failures) > 5 else "",
+        )
     return Document(meta=meta, blocks=blocks)
 
 
 def _save_asset(
-    zf: zipfile.ZipFile, base_dir: str, src: str, assets_dir: Path, index: int
+    zf: zipfile.ZipFile,
+    base_dir: str,
+    src: str,
+    assets_dir: Path,
+    index: int,
+    failures: list[str],
 ) -> str | None:
     """Copy one referenced image out of the zip; None when it is not a packaged file."""
     if not src or "://" in src or src.startswith("data:"):
@@ -53,7 +72,9 @@ def _save_asset(
     dest = assets_dir / f"fig-{index:03d}{Path(target).suffix or '.img'}"
     try:
         dest.write_bytes(zf.read(target))
-    except _ASSET_FAILURES:
+    except _ASSET_FAILURES as exc:
+        logger.debug("EPUB asset %r could not be extracted: %s", target, exc)
+        failures.append(target)
         return None
     return str(dest)
 
@@ -105,7 +126,11 @@ def _cover_item(opf_root: ET.Element) -> ET.Element | None:
 
 
 def _extract_cover(
-    zf: zipfile.ZipFile, opf_root: ET.Element, opf_dir: str, assets_dir: Path
+    zf: zipfile.ZipFile,
+    opf_root: ET.Element,
+    opf_dir: str,
+    assets_dir: Path,
+    failures: list[str],
 ) -> str | None:
     item = _cover_item(opf_root)
     if item is None:
@@ -115,7 +140,9 @@ def _extract_cover(
     dest = assets_dir / f"cover{Path(href).suffix}"
     try:
         dest.write_bytes(zf.read(src))
-    except _ASSET_FAILURES:
+    except _ASSET_FAILURES as exc:
+        logger.debug("EPUB cover %r could not be extracted: %s", src, exc)
+        failures.append(src)
         return None
     return str(dest)
 
