@@ -115,11 +115,20 @@ def test_non_object_json_body_raises_llm_error(monkeypatch, body):
         ("https://ollama.example.com", False),
         ("http://10.0.0.4:11434", False),
         ("", False),
+        ("http://[::1", False),  # unbalanced bracket: urlsplit raises, must not escape
     ],
 )
 def test_is_local_endpoint(monkeypatch, url, expected):
     monkeypatch.setenv("ABC_OLLAMA_URL", url)
     assert ollama_client.is_local_endpoint() is expected
+
+
+def test_malformed_url_degrades_instead_of_crashing(monkeypatch):
+    """The predicate runs before the local_only check, so a raise here crashes every job."""
+    monkeypatch.setenv("ABC_OLLAMA_URL", "http://[::1")
+    assert llm.resolve_llm(local_only=False, use_llm=True) is None
+    with pytest.raises(PrivacyError):  # unparseable is treated as remote, not as a crash
+        llm.resolve_llm(local_only=True, use_llm=True)
 
 
 def test_local_only_refuses_remote_ollama_before_any_request(monkeypatch):

@@ -23,14 +23,14 @@ def is_local_endpoint() -> bool:
     host on the same LAN is still off-box. Any hostname other than `localhost` is treated
     as remote — resolving it is itself a network action, and DNS can point anywhere.
     """
-    host = urlparse(base_url()).hostname
-    if host is None:
-        return False
-    if host == "localhost":
-        return True
     try:
+        host = urlparse(base_url()).hostname
+        if host is None:
+            return False
+        if host == "localhost":
+            return True
         return ipaddress.ip_address(host).is_loopback
-    except ValueError:
+    except ValueError:  # unparseable URL, or a host that is not an IP literal
         return False
 
 
