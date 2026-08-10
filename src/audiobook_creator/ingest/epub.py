@@ -1,6 +1,8 @@
+import itertools
 import posixpath
 import xml.etree.ElementTree as ET
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -22,10 +24,33 @@ def ingest_epub(path: Path, assets_dir: Path) -> Document:
         meta.cover_path = _extract_cover(zf, opf_root, opf_dir, assets_dir)
 
         blocks: list[Block] = []
+        figures = itertools.count()
         for href in _spine_hrefs(opf_root):
-            xhtml = zf.read(posixpath.join(opf_dir, href) if opf_dir else href).decode("utf-8")
-            blocks.extend(_blocks_from_xhtml(xhtml))
+            full_href = posixpath.join(opf_dir, href) if opf_dir else href
+            xhtml = zf.read(full_href).decode("utf-8")
+
+            # An <img src> resolves against its own document's directory, which is not
+            # always the OPF's — bind it per spine item rather than reusing opf_dir.
+            def save_image(src: str, _base: str = posixpath.dirname(full_href)) -> str | None:
+                return _save_asset(zf, _base, src, assets_dir, next(figures))
+
+            blocks.extend(_blocks_from_xhtml(xhtml, save_image))
     return Document(meta=meta, blocks=blocks)
+
+
+def _save_asset(
+    zf: zipfile.ZipFile, base_dir: str, src: str, assets_dir: Path, index: int
+) -> str | None:
+    """Copy one referenced image out of the zip; None when it is not a packaged file."""
+    if not src or "://" in src or src.startswith("data:"):
+        return None
+    target = posixpath.normpath(posixpath.join(base_dir, src) if base_dir else src)
+    dest = assets_dir / f"fig-{index:03d}{Path(target).suffix or '.img'}"
+    try:
+        dest.write_bytes(zf.read(target))
+    except KeyError:
+        return None
+    return str(dest)
 
 
 def _opf_path(zf: zipfile.ZipFile) -> str:
@@ -62,35 +87,61 @@ def _spine_hrefs(opf_root: ET.Element) -> list[str]:
     return hrefs
 
 
-def _extract_cover(
-    zf: zipfile.ZipFile, opf_root: ET.Element, opf_dir: str, assets_dir: Path
-) -> str | None:
-    for item in _manifest(opf_root).values():
+def _cover_item(opf_root: ET.Element) -> ET.Element | None:
+    manifest = _manifest(opf_root)
+    for item in manifest.values():
         if "cover-image" in item.attrib.get("properties", ""):
-            href = item.attrib["href"]
-            src = posixpath.join(opf_dir, href) if opf_dir else href
-            dest = assets_dir / f"cover{Path(href).suffix}"
-            try:
-                dest.write_bytes(zf.read(src))
-            except KeyError:
-                return None
-            return str(dest)
+            return item
+    # EPUB2 has no cover-image property: metadata names the manifest id instead.
+    for meta in opf_root.findall(".//opf:meta", _OPF_NS):
+        if meta.attrib.get("name") == "cover":
+            return manifest.get(meta.attrib.get("content", ""))
     return None
 
 
+def _extract_cover(
+    zf: zipfile.ZipFile, opf_root: ET.Element, opf_dir: str, assets_dir: Path
+) -> str | None:
+    item = _cover_item(opf_root)
+    if item is None:
+        return None
+    href = item.attrib["href"]
+    src = posixpath.join(opf_dir, href) if opf_dir else href
+    dest = assets_dir / f"cover{Path(href).suffix}"
+    try:
+        dest.write_bytes(zf.read(src))
+    except KeyError:
+        return None
+    return str(dest)
+
+
 _BLOCK_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "table", "li"]
+_CAPTURED_TAGS = [*_BLOCK_TAGS, "img"]
 
 
-def _blocks_from_xhtml(xhtml: str) -> list[Block]:
+def _blocks_from_xhtml(
+    xhtml: str, save_image: Callable[[str], str | None] | None = None
+) -> list[Block]:
     soup = BeautifulSoup(xhtml, "html.parser")
     body = soup.find("body")
     if body is None:
         return []
     blocks: list[Block] = []
-    for el in body.find_all(_BLOCK_TAGS):
+    for el in body.find_all(_CAPTURED_TAGS):
         # find_all recurses, so a <p> inside a <td> or an <li> is already carried by
         # its ancestor's flattened text; emitting it again narrates the prose twice.
         if el.find_parent(_BLOCK_TAGS) is not None:
+            continue
+        if el.name == "img":
+            # Void element, so there is nothing to flatten: the alt text is the caption.
+            src = el.get("src", "")
+            blocks.append(
+                Block(
+                    type=BlockType.FIGURE,
+                    text=" ".join(el.get("alt", "").split()),
+                    image_path=save_image(src) if save_image else None,
+                )
+            )
             continue
         text = " ".join(el.get_text(separator=" ").split())
         if not text:

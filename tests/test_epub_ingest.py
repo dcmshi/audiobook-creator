@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from conftest import _epub_with_extra_files
+
 from audiobook_creator.ingest.epub import _blocks_from_xhtml, ingest_epub
 from audiobook_creator.models import BlockType
 
@@ -66,3 +68,35 @@ def test_list_item_wrapping_paragraph_not_duplicated():
     wrapped = [b for b in blocks if b.text == "Wrapped item."]
     assert len(wrapped) == 1
     assert wrapped[0].type is BlockType.PARAGRAPH
+
+
+def test_img_becomes_figure_with_extracted_asset(tmp_path: Path):
+    epub = _epub_with_extra_files(tmp_path, images={"OEBPS/pic.png": b"\x89PNG\r\n\x1a\nxx"})
+    doc = ingest_epub(epub, tmp_path / "assets")
+    figs = [b for b in doc.blocks if b.type is BlockType.FIGURE]
+    assert len(figs) == 1
+    assert figs[0].text == "A storm chart"
+    assert Path(figs[0].image_path).exists()
+
+
+def test_missing_image_href_yields_figure_without_path(tmp_path: Path):
+    # The <img> is in ch1 but the bytes were never packed: keep the figure, drop the path.
+    epub = _epub_with_extra_files(tmp_path, images={"OEBPS/unrelated.png": b"x"})
+    doc = ingest_epub(epub, tmp_path / "assets")
+    figs = [b for b in doc.blocks if b.type is BlockType.FIGURE]
+    assert len(figs) == 1
+    assert figs[0].image_path is None
+
+
+def test_epub2_meta_cover_detected(tmp_path: Path):
+    epub = _epub_with_extra_files(tmp_path, epub2_cover=True)
+    doc = ingest_epub(epub, tmp_path / "assets")
+    assert doc.meta.cover_path is not None
+    assert Path(doc.meta.cover_path).exists()
+
+
+def test_epub3_cover_property_still_detected(tmp_path: Path):
+    epub = _epub_with_extra_files(tmp_path, epub3_cover=True)
+    doc = ingest_epub(epub, tmp_path / "assets")
+    assert doc.meta.cover_path is not None
+    assert Path(doc.meta.cover_path).exists()

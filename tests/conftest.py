@@ -82,18 +82,75 @@ def no_implicit_llm(monkeypatch):
     monkeypatch.setenv("ABC_LLM", "none")
 
 
+# ch1 with a figure in it. The <img> sits directly under <body>: an <img> nested inside a
+# captured block is skipped by the ancestor guard, so keep it a sibling of the paragraphs.
+_CH1_WITH_IMG = _CH1.replace(
+    "<p>It was a dark and stormy night.</p>",
+    '<p>It was a dark and stormy night.</p>\n<img src="pic.png" alt="A storm chart"/>',
+)
+
+# EPUB2 names the cover indirectly: a <meta name="cover"> pointing at a manifest id, with no
+# EPUB3 properties="cover-image" anywhere.
+_OPF_EPUB2_COVER = _OPF.replace(
+    "<dc:language>en</dc:language>",
+    '<dc:language>en</dc:language>\n    <meta name="cover" content="cover-img"/>',
+).replace(
+    '<item id="nav"',
+    '<item id="cover-img" href="cover.jpg" media-type="image/jpeg"/>\n    <item id="nav"',
+)
+
+
+def _build_epub(
+    epub_path: Path,
+    *,
+    ch1: str = _CH1,
+    opf: str = _OPF,
+    extra: dict[str, bytes] | None = None,
+) -> Path:
+    with zipfile.ZipFile(epub_path, "w") as zf:
+        zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        zf.writestr("META-INF/container.xml", _CONTAINER)
+        zf.writestr("OEBPS/content.opf", opf)
+        zf.writestr("OEBPS/nav.xhtml", _NAV)
+        zf.writestr("OEBPS/ch1.xhtml", ch1)
+        zf.writestr("OEBPS/ch2.xhtml", _CH2)
+        zf.writestr("OEBPS/refs.xhtml", _REFS)
+        for name, data in (extra or {}).items():
+            zf.writestr(name, data)
+    return epub_path
+
+
+_OPF_EPUB3_COVER = _OPF.replace(
+    '<item id="nav"',
+    '<item id="cover-img" href="cover.jpg" media-type="image/jpeg"'
+    ' properties="cover-image"/>\n    <item id="nav"',
+)
+
+
+def _epub_with_extra_files(
+    tmp_path: Path,
+    *,
+    images: dict[str, bytes] | None = None,
+    epub2_cover: bool = False,
+    epub3_cover: bool = False,
+) -> Path:
+    """The make_epub book plus optional image entries, an <img> in ch1, or either cover style."""
+    extra = dict(images or {})
+    opf = _OPF
+    if epub2_cover or epub3_cover:
+        opf = _OPF_EPUB2_COVER if epub2_cover else _OPF_EPUB3_COVER
+        extra.setdefault("OEBPS/cover.jpg", b"\xff\xd8\xffJPEGBYTES")
+    return _build_epub(
+        tmp_path / "extra-book.epub",
+        ch1=_CH1_WITH_IMG if images else _CH1,
+        opf=opf,
+        extra=extra,
+    )
+
+
 @pytest.fixture
 def make_epub(tmp_path: Path):
     def _make() -> Path:
-        epub_path = tmp_path / "test-book.epub"
-        with zipfile.ZipFile(epub_path, "w") as zf:
-            zf.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
-            zf.writestr("META-INF/container.xml", _CONTAINER)
-            zf.writestr("OEBPS/content.opf", _OPF)
-            zf.writestr("OEBPS/nav.xhtml", _NAV)
-            zf.writestr("OEBPS/ch1.xhtml", _CH1)
-            zf.writestr("OEBPS/ch2.xhtml", _CH2)
-            zf.writestr("OEBPS/refs.xhtml", _REFS)
-        return epub_path
+        return _build_epub(tmp_path / "test-book.epub")
 
     return _make

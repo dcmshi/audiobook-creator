@@ -123,6 +123,56 @@ def test_textless_picture_does_not_use_markdown_export():
     assert doc.blocks[0].text == ""  # diagnostic comment must never be narrated
 
 
+def test_picture_with_get_image_is_saved(tmp_path: Path):
+    class _Pic:
+        label = SimpleNamespace(value="picture")
+
+        def get_image(self, doc):
+            class _Img:
+                def save(self, dest):
+                    Path(dest).write_bytes(b"png")
+
+            return _Img()
+
+    class Doc(SimpleNamespace):
+        name = "t"
+
+        def iterate_items(self):
+            return [(_Pic(), 0)]
+
+    doc = document_from_docling(Doc(), assets_dir=tmp_path)
+    fig = doc.blocks[0]
+    assert fig.type is BlockType.FIGURE
+    assert Path(fig.image_path).name == "fig-000.png"
+    assert Path(fig.image_path).read_bytes() == b"png"
+
+
+def test_picture_image_failure_keeps_figure_without_path(tmp_path: Path):
+    class _Pic:
+        label = SimpleNamespace(value="picture")
+
+        def get_image(self, doc):
+            raise RuntimeError("no bitmap on this item")
+
+    class Doc(SimpleNamespace):
+        name = "t"
+
+        def iterate_items(self):
+            return [(_Pic(), 0)]
+
+    doc = document_from_docling(Doc(), assets_dir=tmp_path)
+    assert doc.blocks[0].type is BlockType.FIGURE
+    assert doc.blocks[0].image_path is None
+
+
+def test_pictures_without_assets_dir_are_unchanged():
+    """The no-assets_dir signature must behave exactly as it did for existing callers."""
+    doc = document_from_docling(FakeDoclingDoc())
+    figs = [b for b in doc.blocks if b.type is BlockType.FIGURE]
+    assert len(figs) == 1
+    assert figs[0].image_path is None
+
+
 @pytest.mark.docling
 def test_adapter_against_real_docling(tmp_path: Path):
     pytest.importorskip("docling")
@@ -143,6 +193,8 @@ def test_adapter_against_real_docling(tmp_path: Path):
     )
     result = DocumentConverter().convert(str(html))
     doc = document_from_docling(result.document)
+    # HTML pictures may carry no bitmap, so assert only that the live path tolerates assets_dir.
+    document_from_docling(result.document, assets_dir=tmp_path / "assets")
 
     paragraphs = [b.text for b in doc.blocks if b.type is BlockType.PARAGRAPH]
     assert "Alpha body." in paragraphs and "Beta body." in paragraphs
