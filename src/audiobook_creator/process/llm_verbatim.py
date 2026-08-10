@@ -2,7 +2,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from audiobook_creator.process.llm.base import LLMClient, LLMError
+from audiobook_creator.process.llm.base import LLMClient
 from audiobook_creator.process.llm.cache import cached_complete
 from audiobook_creator.process.rules import normalize
 
@@ -41,7 +41,10 @@ def make_llm_normalizer(client: LLMClient, cache_dir: Path) -> Callable[[str], s
     def normalizer(text: str) -> str:
         try:
             out = cached_complete(client, cache_dir, text, system=VERBATIM_SYSTEM)
-        except LLMError as exc:
+        # Broad on purpose: this is the degradation point for the whole LLM layer. A client bug
+        # on one paragraph must cost that paragraph the LLM, not cost the book its conversion.
+        # PrivacyError cannot reach here — resolve_llm raises it before a normalizer exists.
+        except Exception as exc:  # noqa: BLE001
             logger.warning("LLM normalization failed, falling back to rules: %s", exc)
             return normalize(text)
         if not _valid(text, out):

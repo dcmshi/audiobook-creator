@@ -104,6 +104,16 @@ def test_non_object_json_body_raises_llm_error(monkeypatch, body):
         client.complete("x")
 
 
+def test_null_content_raises_llm_error(monkeypatch):
+    """`content: null` yields None from .get, which used to blow up at .strip()."""
+    monkeypatch.setattr(
+        ollama_client.request, "urlopen", _BadBodyHTTP(b'{"message": {"content": null}}')
+    )
+    client = ollama_client.OllamaClient()
+    with pytest.raises(LLMError, match="no text"):
+        client.complete("x")
+
+
 @pytest.mark.parametrize(
     ("url", "expected"),
     [

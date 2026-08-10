@@ -95,6 +95,27 @@ def test_non_object_json_body_raises_llm_error(monkeypatch, api_key, body):
         client.complete("x")
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"choices": "x"}',
+        b'{"choices": [42]}',
+        b'{"choices": [{"message": "s"}]}',
+        b'{"choices": [{"message": {"content": 42}}]}',
+    ],
+)
+def test_malformed_choice_shape_raises_llm_error(monkeypatch, api_key, body):
+    """Well-formed JSON object, wrong types inside: must degrade, not raise AttributeError."""
+
+    def fake_urlopen(req, timeout=None):
+        return io.BytesIO(body)
+
+    monkeypatch.setattr(kimi_client.request, "urlopen", fake_urlopen)
+    client = kimi_client.KimiClient()
+    with pytest.raises(LLMError):
+        client.complete("x")
+
+
 @pytest.mark.llm_live
 def test_live_complete_smoke():
     client = kimi_client.KimiClient()

@@ -28,6 +28,13 @@ class BrokenLLM(GoodLLM):
         raise LLMError("down")
 
 
+class ExplodingLLM(GoodLLM):
+    """A client bug, not an LLMError — one bad chunk must not kill a whole book."""
+
+    def complete(self, user, *, system=None, max_tokens=2048):
+        raise AttributeError("'NoneType' object has no attribute 'strip'")
+
+
 class ExpandingLLM(GoodLLM):
     """Correct normalization of DENSE_SOURCE, as produced by a real model: ratio ~1.79."""
 
@@ -77,6 +84,12 @@ def test_padding_still_falls_back_to_rules(tmp_path: Path):
 
 def test_llm_error_falls_back_to_rules(tmp_path: Path):
     fn = make_llm_normalizer(BrokenLLM(), tmp_path)
+    assert "percent" in fn("Growth of 40% overall this year across all divisions.")
+
+
+def test_non_llm_error_falls_back_to_rules(tmp_path: Path):
+    """The normalizer is the degradation point for the whole layer, not just for LLMError."""
+    fn = make_llm_normalizer(ExplodingLLM(), tmp_path)
     assert "percent" in fn("Growth of 40% overall this year across all divisions.")
 
 

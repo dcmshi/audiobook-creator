@@ -83,7 +83,9 @@ class OllamaClient:
             raise LLMError(
                 f"Ollama call failed: response body was {type(data).__name__}, not an object"
             )
-        text = (data.get("message") or {}).get("content", "")
+        # `or ""`, not a .get default: a `content: null` body yields None, which the default
+        # would not catch.
+        text = (data.get("message") or {}).get("content") or ""
         if not text.strip():
             raise LLMError("Ollama returned no text")
         return text

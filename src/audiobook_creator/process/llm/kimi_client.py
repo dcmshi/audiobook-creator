@@ -51,8 +51,17 @@ class KimiClient:
             raise LLMError(
                 f"Kimi call failed: response body was {type(data).__name__}, not an object"
             )
-        choices = data.get("choices") or []
-        text = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
+        # Every level is type-checked: a well-formed JSON object can still carry wrong types
+        # inside ({"choices": [42]}), and an AttributeError here would kill the whole run.
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise LLMError("Kimi call failed: response contained no choices")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        text = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(text, str):
+            raise LLMError(
+                f"Kimi call failed: malformed choice, content was {type(text).__name__}"
+            )
         if not text.strip():
             raise LLMError("Kimi returned no text")
         return text
