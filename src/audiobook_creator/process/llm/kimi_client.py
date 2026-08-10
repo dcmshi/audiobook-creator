@@ -1,4 +1,5 @@
 import base64
+import http.client
 import json
 import os
 from pathlib import Path
@@ -42,8 +43,14 @@ class KimiClient:
         try:
             with request.urlopen(req, timeout=600) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-        except OSError as exc:  # HTTPError subclasses OSError: auth and rate-limit land here too
+        # HTTPError subclasses OSError (auth, rate limits); a non-JSON or mis-encoded body raises
+        # ValueError; a truncated one raises HTTPException. All must degrade to the rule-based path.
+        except (OSError, ValueError, http.client.HTTPException) as exc:
             raise LLMError(f"Kimi call failed: {exc}") from exc
+        if not isinstance(data, dict):  # valid JSON, wrong shape: `null`, a bare string, a list
+            raise LLMError(
+                f"Kimi call failed: response body was {type(data).__name__}, not an object"
+            )
         choices = data.get("choices") or []
         text = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
         if not text.strip():

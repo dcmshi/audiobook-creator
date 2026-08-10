@@ -74,6 +74,27 @@ def test_empty_content_raises(monkeypatch, api_key):
         client.complete("x")
 
 
+def test_non_json_body_raises_llm_error(monkeypatch, api_key):
+    def fake_urlopen(req, timeout=None):
+        return io.BytesIO(b"<html>gateway error</html>")
+
+    monkeypatch.setattr(kimi_client.request, "urlopen", fake_urlopen)
+    client = kimi_client.KimiClient()
+    with pytest.raises(LLMError, match="Kimi call failed"):
+        client.complete("x")
+
+
+@pytest.mark.parametrize("body", [b"null", b'"hi"', b"[]"])
+def test_non_object_json_body_raises_llm_error(monkeypatch, api_key, body):
+    def fake_urlopen(req, timeout=None):
+        return io.BytesIO(body)
+
+    monkeypatch.setattr(kimi_client.request, "urlopen", fake_urlopen)
+    client = kimi_client.KimiClient()
+    with pytest.raises(LLMError, match="Kimi call failed"):
+        client.complete("x")
+
+
 @pytest.mark.llm_live
 def test_live_complete_smoke():
     client = kimi_client.KimiClient()
