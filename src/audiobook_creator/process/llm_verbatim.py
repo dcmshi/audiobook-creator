@@ -27,10 +27,12 @@ def _valid(source: str, out: str) -> bool:
     out = out.strip()
     if not out:
         return False
-    # A model that summarizes or pads is not normalizing; either way the rule path is safer
-    # than shipping content the book does not have.
+    # The floor is the content-loss guard: shrinkage means the model summarized. The ceiling is
+    # deliberately loose because correct normalization expands dense text a long way ("12%" ->
+    # "twelve percent", "5 mg/L" -> "five milligrams per liter"); commentary and markup are
+    # caught by the marker check below rather than by length.
     ratio = len(out) / max(len(source), 1)
-    if not 0.5 <= ratio <= 1.5:
+    if not 0.5 <= ratio <= 2.5:
         return False
     return not any(marker in out for marker in _FORBIDDEN)
 
