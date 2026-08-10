@@ -1,4 +1,3 @@
-import contextlib
 import logging
 import os
 from collections.abc import Callable
@@ -56,6 +55,6 @@ def _register_builtin() -> None:
     register_llm("ollama", OllamaClient, is_local=True)
 
 
-# The client modules land in Tasks 2-4; the package must import before they exist.
-with contextlib.suppress(ImportError):
-    _register_builtin()
+# Unguarded on purpose: an ImportError here means a client module is broken, and a silently
+# empty registry would drop every job to the rule-based path with no signal.
+_register_builtin()
