@@ -7,10 +7,14 @@ from audiobook_creator.process.llm.base import LLMClient, LLMError
 
 logger = logging.getLogger(__name__)
 
-_REGISTRY: dict[str, tuple[Callable[[], LLMClient], bool]] = {}
+_IsLocal = bool | Callable[[], bool]
+
+_REGISTRY: dict[str, tuple[Callable[[], LLMClient], _IsLocal]] = {}
 
 
-def register_llm(name: str, factory: Callable[[], LLMClient], is_local: bool) -> None:
+def register_llm(name: str, factory: Callable[[], LLMClient], is_local: _IsLocal) -> None:
+    """`is_local` may be a predicate when locality depends on configuration rather than the
+    provider itself — an Ollama pointed at another host is not local."""
     _REGISTRY[name] = (factory, is_local)
 
 
@@ -33,6 +37,8 @@ def resolve_llm(
             logger.warning("unknown LLM provider %r requested; skipping", name)
             continue
         factory, is_local = _REGISTRY[name]
+        if callable(is_local):
+            is_local = is_local()  # evaluated per resolve: the endpoint can change between jobs
         if local_only and not is_local:
             raise PrivacyError(
                 f"LLM provider {name!r} sends text to a network service, "
@@ -48,11 +54,11 @@ def resolve_llm(
 def _register_builtin() -> None:
     from audiobook_creator.process.llm.anthropic_client import AnthropicClient
     from audiobook_creator.process.llm.kimi_client import KimiClient
-    from audiobook_creator.process.llm.ollama_client import OllamaClient
+    from audiobook_creator.process.llm.ollama_client import OllamaClient, is_local_endpoint
 
     register_llm("anthropic", AnthropicClient, is_local=False)
     register_llm("kimi", KimiClient, is_local=False)
-    register_llm("ollama", OllamaClient, is_local=True)
+    register_llm("ollama", OllamaClient, is_local=is_local_endpoint)
 
 
 # Unguarded on purpose: an ImportError here means a client module is broken, and a silently

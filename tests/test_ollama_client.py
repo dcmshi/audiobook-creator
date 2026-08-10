@@ -1,10 +1,20 @@
+import http.client
 import io
 import json
 
 import pytest
 
+from audiobook_creator.core.privacy import PrivacyError
+from audiobook_creator.process import llm
 from audiobook_creator.process.llm import ollama_client
 from audiobook_creator.process.llm.base import LLMError, LLMUnsupported
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch):
+    """Ollama config comes from the environment; pin it so tests read the real defaults."""
+    for var in ("ABC_LLM", "ABC_OLLAMA_URL", "ABC_OLLAMA_MODEL"):
+        monkeypatch.delenv(var, raising=False)
 
 
 class _FakeHTTP:
@@ -19,6 +29,17 @@ class _FakeHTTP:
         else:
             body = json.dumps({"message": {"content": "local answer"}}).encode()
         return io.BytesIO(body)
+
+
+class _RecordingHTTP:
+    """Answers the version probe and records every URL, so a test can prove none was requested."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, req, timeout=None):
+        self.calls.append(req if isinstance(req, str) else req.full_url)
+        return io.BytesIO(b'{"version": "0.5.0"}')
 
 
 class _BadBodyHTTP:
@@ -81,3 +102,55 @@ def test_non_object_json_body_raises_llm_error(monkeypatch, body):
     client = ollama_client.OllamaClient()
     with pytest.raises(LLMError, match="Ollama call failed"):
         client.complete("x")
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://localhost:11434", True),
+        ("http://127.0.0.1:11434", True),
+        ("http://127.0.0.2:11434", True),  # all of 127.0.0.0/8 is this machine
+        ("http://[::1]:11434", True),
+        ("http://192.168.1.50:11434", False),  # same LAN is still off-box
+        ("https://ollama.example.com", False),
+        ("http://10.0.0.4:11434", False),
+        ("", False),
+    ],
+)
+def test_is_local_endpoint(monkeypatch, url, expected):
+    monkeypatch.setenv("ABC_OLLAMA_URL", url)
+    assert ollama_client.is_local_endpoint() is expected
+
+
+def test_local_only_refuses_remote_ollama_before_any_request(monkeypatch):
+    recorder = _RecordingHTTP()
+    monkeypatch.setattr(ollama_client.request, "urlopen", recorder)
+    monkeypatch.setenv("ABC_OLLAMA_URL", "http://192.168.1.50:11434")
+    with pytest.raises(PrivacyError):
+        llm.resolve_llm(local_only=True, use_llm=True)
+    assert recorder.calls == []  # the version probe would itself have shipped a packet
+
+
+def test_local_only_allows_loopback_ollama(monkeypatch):
+    recorder = _RecordingHTTP()
+    monkeypatch.setattr(ollama_client.request, "urlopen", recorder)
+    client = llm.resolve_llm(local_only=True, use_llm=True)
+    assert client is not None
+    assert client.name == "ollama"
+    assert recorder.calls == ["http://localhost:11434/api/version"]
+
+
+def test_empty_url_raises_llm_error(monkeypatch):
+    # Real urlopen: base "" makes the probe URL "/api/version" -> ValueError, no network touched.
+    monkeypatch.setenv("ABC_OLLAMA_URL", "")
+    with pytest.raises(LLMError, match="Ollama not reachable"):
+        ollama_client.OllamaClient()
+
+
+def test_non_http_service_on_port_raises_llm_error(monkeypatch):
+    def bad_status(req, timeout=None):
+        raise http.client.BadStatusLine("not-http-garbage")
+
+    monkeypatch.setattr(ollama_client.request, "urlopen", bad_status)
+    with pytest.raises(LLMError, match="Ollama not reachable"):
+        ollama_client.OllamaClient()

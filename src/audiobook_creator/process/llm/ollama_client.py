@@ -1,22 +1,51 @@
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
 from urllib import request
+from urllib.parse import urlparse
 
 from audiobook_creator.process.llm.base import LLMError, LLMUnsupported
+
+_DEFAULT_URL = "http://localhost:11434"
+
+
+def base_url() -> str:
+    return os.environ.get("ABC_OLLAMA_URL", _DEFAULT_URL).rstrip("/")
+
+
+def is_local_endpoint() -> bool:
+    """True when the configured Ollama URL is this machine.
+
+    Registered as ollama's locality predicate so a local_only job refuses a LAN or hosted
+    Ollama before any request is made. "Local" means this machine, not this network: a
+    host on the same LAN is still off-box. Any hostname other than `localhost` is treated
+    as remote — resolving it is itself a network action, and DNS can point anywhere.
+    """
+    host = urlparse(base_url()).hostname
+    if host is None:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class OllamaClient:
     name = "ollama"
 
     def __init__(self) -> None:
-        self.base = os.environ.get("ABC_OLLAMA_URL", "http://localhost:11434").rstrip("/")
+        self.base = base_url()
         self.model = os.environ.get("ABC_OLLAMA_MODEL", "qwen3:14b")
         try:
             with request.urlopen(f"{self.base}/api/version", timeout=2):
                 pass
-        except OSError as exc:
+        # A malformed URL raises ValueError and a non-HTTP service on the port raises
+        # HTTPException; neither is an OSError, and both must degrade, not crash.
+        except (OSError, ValueError, http.client.HTTPException) as exc:
             raise LLMError(
                 f"Ollama not reachable at {self.base} (is it running? set ABC_OLLAMA_URL)"
             ) from exc
