@@ -31,6 +31,9 @@ class OllamaClient:
                 "model": self.model,
                 "messages": messages,
                 "stream": False,
+                # Thinking models (qwen3) otherwise spend num_predict on reasoning and return
+                # empty content. The pipeline needs speakable prose, not reasoning.
+                "think": False,
                 "options": {"num_predict": max_tokens},
             }
         ).encode("utf-8")

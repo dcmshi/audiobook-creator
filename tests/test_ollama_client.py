@@ -38,11 +38,14 @@ def test_complete_posts_chat(monkeypatch):
     fake = _FakeHTTP()
     monkeypatch.setattr(ollama_client.request, "urlopen", fake)
     client = ollama_client.OllamaClient()
-    assert client.complete("hello", system="be terse") == "local answer"
+    assert client.complete("hello", system="be terse", max_tokens=123) == "local answer"
     url, data = fake.requests[-1]
     payload = json.loads(data)
     assert url.endswith("/api/chat")
     assert payload["stream"] is False
+    # Thinking models otherwise spend num_predict on reasoning and return empty content.
+    assert payload["think"] is False
+    assert payload["options"]["num_predict"] == 123
     assert payload["messages"][0] == {"role": "system", "content": "be terse"}
 
 
