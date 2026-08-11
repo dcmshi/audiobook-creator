@@ -168,7 +168,9 @@ def run_stage(job: Job) -> None:
     # WAV here, so audio whose source text is gone would be appended to the new book. Top-level
     # only: the chunk cache lives in a subdirectory and stays.
     stems = {path.stem for path in job.processed_dir.glob("*.txt")}
-    orphans = sorted(p for p in job.audio_dir.glob("*.wav") if p.stem not in stems)
+    # No processed text at all is "nothing to compare against", not "everything is orphaned":
+    # a missing or emptied directory must not wipe a run's audio.
+    orphans = sorted(p for p in job.audio_dir.glob("*.wav") if p.stem not in stems) if stems else []
     if orphans:
         logger.warning(
             "removing %d chapter audio file(s) with no processed text: %s",

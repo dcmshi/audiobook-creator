@@ -130,3 +130,43 @@ def test_title_only_chapter_still_written_beside_a_prose_chapter(tmp_path: Path)
     files = sorted(job.processed_dir.glob("*.txt"))
     assert [f.name for f in files] == ["000.txt", "001.txt"]
     assert files[1].read_text(encoding="utf-8") == "Two. [[pause]]"
+
+
+def test_stage_sweeps_processed_text_this_run_did_not_produce(tmp_path: Path):
+    """A run over a smaller chapter set must not leave the previous run's extra files."""
+    from audiobook_creator.models import Block, BlockType, Chapter, Matter
+    from audiobook_creator.process import stage as process_stage
+
+    job = Job.create(tmp_path, JobConfig(source="x.epub"))
+    chapter = Chapter(
+        index=0,
+        title="Only Chapter",
+        matter=Matter.BODY,
+        blocks=[Block(type=BlockType.PARAGRAPH, text="The rain fell all night.")],
+    )
+    (job.chapters_dir / "000.json").write_text(chapter.model_dump_json(), encoding="utf-8")
+    job.processed_dir.mkdir(parents=True, exist_ok=True)
+    for stem in ("001", "002"):
+        (job.processed_dir / f"{stem}.txt").write_text("stale rewrite prose.", encoding="utf-8")
+    process_stage.run_stage(job)
+    assert [p.name for p in sorted(job.processed_dir.glob("*.txt"))] == ["000.txt"]
+
+
+def test_stage_sweeps_stale_text_even_when_the_run_fails(tmp_path: Path):
+    """A table-only chapter renders nothing narratable; its old text must still go."""
+    from audiobook_creator.models import Block, BlockType, Chapter, Matter
+    from audiobook_creator.process import stage as process_stage
+
+    job = Job.create(tmp_path, JobConfig(source="x.epub"))
+    chapter = Chapter(
+        index=0,
+        title="Data",
+        matter=Matter.BODY,
+        blocks=[Block(type=BlockType.TABLE, text="Year, Growth. 2026, 40.")],
+    )
+    (job.chapters_dir / "000.json").write_text(chapter.model_dump_json(), encoding="utf-8")
+    job.processed_dir.mkdir(parents=True, exist_ok=True)
+    (job.processed_dir / "007.txt").write_text("rewrite prose about the table.", encoding="utf-8")
+    with pytest.raises(ValueError):
+        process_stage.run_stage(job)
+    assert not (job.processed_dir / "007.txt").exists()

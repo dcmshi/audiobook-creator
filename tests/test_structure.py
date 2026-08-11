@@ -177,3 +177,15 @@ def test_llm_tiebreaker_still_applies_flips_that_leave_body_behind():
     ]
     out = refine_matter_with_llm(before, _TiebreakLLM(reply="0: front\n2: back"))
     assert [c.matter for c in out] == [Matter.FRONT, Matter.BODY, Matter.BACK]
+
+
+def test_structure_stage_records_the_tiebreaker_backend(tmp_path: Path, monkeypatch):
+    from audiobook_creator.process import llm as llm_pkg
+
+    monkeypatch.setattr(llm_pkg, "resolve_llm", lambda **kw: _TiebreakLLM(reply="0: body"))
+    job = Job.create(tmp_path, JobConfig(source="x.epub"))
+    doc = _doc([_h("One"), _p("a")])
+    job.document_path.write_text(doc.model_dump_json(), encoding="utf-8")
+    run_stage(job)
+    assert "llm:fake" in job.state.backends_used
+    assert Job.load(tmp_path, job.state.id).state.backends_used == job.state.backends_used

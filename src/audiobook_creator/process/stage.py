@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 
 from audiobook_creator.core.job import Job
@@ -8,6 +9,8 @@ from audiobook_creator.process.llm_verbatim import make_llm_normalizer
 from audiobook_creator.process.podcast import render_podcast
 from audiobook_creator.process.rewrite import render_rewrite
 from audiobook_creator.process.verbatim import has_speakable_blocks, render_chapter_text
+
+logger = logging.getLogger(__name__)
 
 
 def _record_backend(job: Job, client: LLMClient) -> None:
@@ -98,6 +101,7 @@ def run_stage(job: Job) -> None:
     include_visual = job.state.config.mode is Mode.REWRITE
     job.processed_dir.mkdir(parents=True, exist_ok=True)
     written = 0
+    written_stems: set[str] = set()
     # Every titled chapter renders a title line, so counting files cannot tell us
     # whether the book has any prose at all — track block-derived text separately.
     any_prose = False
@@ -110,6 +114,19 @@ def run_stage(job: Job) -> None:
             continue
         any_prose = any_prose or has_speakable_blocks(chapter, include_visual=include_visual)
         (job.processed_dir / f"{chapter.index:03d}.txt").write_text(text, encoding="utf-8")
+        written_stems.add(f"{chapter.index:03d}")
         written += 1
+    # Every body chapter is re-rendered above, so anything still here belongs to a previous
+    # run under a different mode. Swept before the guard below: a failing run must not leave
+    # the old mode's text for synthesize to narrate either.
+    orphans = sorted(p for p in job.processed_dir.glob("*.txt") if p.stem not in written_stems)
+    if orphans:
+        logger.warning(
+            "removing %d processed text file(s) this run did not produce: %s",
+            len(orphans),
+            ", ".join(p.stem for p in orphans),
+        )
+        for path in orphans:
+            path.unlink()
     if written == 0 or not any_prose:
         raise ValueError("no body chapters produced speakable text")

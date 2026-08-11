@@ -275,3 +275,12 @@ def test_orphaned_chapter_audio_is_removed(tmp_path: Path):
     synth_stage.run_stage(job)
     assert [w.name for w in sorted(job.audio_dir.glob("*.wav"))] == ["000.wav"]
     assert (job.audio_dir / "cache").is_dir()  # the chunk cache is not swept
+
+
+def test_wav_sweep_skips_an_empty_processed_dir(tmp_path: Path):
+    """No processed text at all means nothing to compare against, not everything orphaned."""
+    job = _job_with_processed(tmp_path, {"000.txt": "One."})
+    synth_stage.run_stage(job)
+    (job.processed_dir / "000.txt").unlink()
+    synth_stage.run_stage(job)
+    assert (job.audio_dir / "000.wav").exists()

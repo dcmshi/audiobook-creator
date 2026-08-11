@@ -20,6 +20,12 @@ def run_stage(job: Job) -> None:
         local_only=cfg.local_only, use_llm=cfg.use_llm, provider=cfg.llm_provider
     )
     if client is not None:
+        # Recorded like every other backend: the audit trail should show that an LLM had a
+        # hand in which chapters are narrated, not only in how they read.
+        used = f"llm:{client.name}"
+        if used not in job.state.backends_used:
+            job.state.backends_used.append(used)
+            job.save()
         chapters = refine_matter_with_llm(chapters, client)
     job.chapters_dir.mkdir(parents=True, exist_ok=True)
     for chapter in chapters:
