@@ -4,6 +4,7 @@ from pathlib import Path
 
 from audiobook_creator.process.llm.base import LLMClient
 from audiobook_creator.process.llm.cache import cached_complete
+from audiobook_creator.process.output_contract import is_speakable
 from audiobook_creator.process.rules import normalize
 
 logger = logging.getLogger(__name__)
@@ -20,9 +21,6 @@ aloud naturally, changing NOTHING else:
   the whole text, no commentary about what you did.
 Reply with the normalized text and nothing else."""
 
-_FORBIDDEN = ("#", "<", "**", "[[")
-
-
 def _valid(source: str, out: str) -> bool:
     out = out.strip()
     if not out:
@@ -34,7 +32,8 @@ def _valid(source: str, out: str) -> bool:
     ratio = len(out) / max(len(source), 1)
     if not 0.5 <= ratio <= 2.5:
         return False
-    return not any(marker in out for marker in _FORBIDDEN)
+    # Rejection, not removal: the rule path is right here, so strictness is cheap.
+    return is_speakable(out)
 
 
 def make_llm_normalizer(client: LLMClient, cache_dir: Path) -> Callable[[str], str]:

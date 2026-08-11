@@ -6,6 +6,7 @@ from pathlib import Path
 from audiobook_creator.models import Block, BlockType, Chapter
 from audiobook_creator.process.llm.base import LLMClient
 from audiobook_creator.process.llm.cache import _cache_key, cached_complete
+from audiobook_creator.process.output_contract import is_speakable, sanitize
 from audiobook_creator.process.rules import normalize
 from audiobook_creator.process.verbatim import PAUSE, PLACEHOLDER_TITLE
 
@@ -146,32 +147,6 @@ def _windows(texts: list[str], limit: int = _WINDOW_LIMIT) -> list[list[int]]:
     return windows
 
 
-# Same output contract the verbatim validator enforces: prose only, nothing a narrator would
-# have to read as a symbol.
-_FORBIDDEN_MARKUP = ("#", "**", "<")
-
-
-def _is_speakable(text: str) -> bool:
-    if any(marker in text for marker in _FORBIDDEN_MARKUP):
-        return False
-    # [[pause]] is the one bracket pair the prompt allows; anything else survived cleanup.
-    return "[[" not in text.replace(PAUSE, "")
-
-
-# Markdown and XML in their real forms. Deliberately NOT part of _strip_markers: that runs
-# before _is_speakable, so sanitising there would leave the validator nothing to catch and
-# silently pass markup-bearing rewrites through.
-#
-# Both patterns are bounded to a single line, because this runs over blocks already joined and
-# it is the one path whose job is never to lose content:
-#   - a tag needs a tag-like opening and no newline, or prose comparing "a < b" in one block to
-#     "c > d" in a later one would have everything between them deleted (get_text() decodes
-#     &lt;/&gt; back into literal angle brackets, so that prose really does reach block text);
-#   - the heading marker uses [ \t] rather than \s, or the blank line before "## B" is eaten and
-#     a paragraph break degrades to a line break that _normalize_prose cannot restore.
-_MARKUP = re.compile(r"<[/a-zA-Z][^>\n]*>|\*\*|^[ \t]*#{1,6}[ \t]*", re.MULTILINE)
-
-
 def _verbatim_window(items: list[tuple[Block, str, str]], window: list[int]) -> str:
     """The window's own blocks, cleaned and rule-normalized — the fallback for a bad rewrite.
 
@@ -181,7 +156,7 @@ def _verbatim_window(items: list[tuple[Block, str, str]], window: list[int]) -> 
     no other cleanup.
     """
     joined = "\n\n".join(items[i][2] for i in window)
-    return _normalize_prose(_MARKUP.sub("", _strip_markers(joined)))
+    return _normalize_prose(sanitize(_strip_markers(joined)))
 
 
 def render_rewrite(chapter: Chapter, client: LLMClient, cache_dir: Path) -> str:
@@ -223,7 +198,7 @@ def render_rewrite(chapter: Chapter, client: LLMClient, cache_dir: Path) -> str:
             # Each of the three roads to the fallback warns exactly once.
             if not rewritten:
                 logger.warning("window rewrite returned no text, falling back to verbatim text")
-            elif not _is_speakable(rewritten):
+            elif not is_speakable(rewritten):
                 logger.warning("window rewrite contained markup, falling back to verbatim text")
                 rewritten = ""
         if not rewritten:

@@ -171,3 +171,38 @@ def test_stale_processed_text_survives_an_invalid_script(tmp_path: Path, monkeyp
         process_stage.run_stage(job)
     kept = sorted(p.name for p in job.processed_dir.glob("*.txt"))
     assert kept == ["000.txt", "001.txt", "002.txt"]
+
+
+def test_markup_in_an_utterance_is_rejected(tmp_path: Path):
+    class MarkdownLLM(PodcastLLM):
+        def complete(self, user, *, system=None, max_tokens=2048):
+            return _SCRIPT.replace(
+                "[[speaker:2]] Storms are loud, and the data proves it.",
+                "[[speaker:2]] Storms are **loud**, see <em>chart</em>.",
+            )
+
+    with pytest.raises(LLMError, match="markup"):
+        render_podcast("T", _chapters(), MarkdownLLM(), tmp_path)
+
+
+def test_script_with_only_one_speaker_is_rejected(tmp_path: Path):
+    class MonologueLLM(PodcastLLM):
+        def complete(self, user, *, system=None, max_tokens=2048):
+            return "\n".join(f"[[speaker:1]] Point {i}." for i in range(5))
+
+    with pytest.raises(LLMError, match="both hosts"):
+        render_podcast("T", _chapters(), MonologueLLM(), tmp_path)
+
+
+def test_utterances_get_the_rules_post_pass(tmp_path: Path):
+    class SymbolLLM(PodcastLLM):
+        def complete(self, user, *, system=None, max_tokens=2048):
+            return _SCRIPT.replace(
+                "[[speaker:2]] Rainfall hit four hundred millimeters.",
+                "[[speaker:2]] Growth hit 40% and Fig. 3 shows it.",
+            )
+
+    out = render_podcast("T", _chapters(), SymbolLLM(), tmp_path)
+    assert "40 percent" in out
+    assert "Figure 3" in out
+    assert out.splitlines()[-1].startswith("[[speaker:2]] ")  # the tag survives the pass
