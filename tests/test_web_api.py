@@ -103,3 +103,103 @@ def test_runner_survives_a_failing_pipeline():
         assert runner.is_active("deadbeef") is False
     finally:
         runner.shutdown()
+
+
+def _upload(c, epub_bytes: bytes, **form):
+    files = {"file": ("book.epub", epub_bytes, "application/epub+zip")}
+    data = {
+        "mode": "verbatim",
+        "tts_backend": "stub",
+        "voice": "af_heart",
+        "formats": "m4b",
+        "local_only": "false",
+        "use_llm": "false",
+        **form,
+    }
+    return c.post("/api/jobs", files=files, data=data)
+
+
+def test_upload_creates_and_runs_job(client, make_epub_bytes):
+    c, jobs_dir = client
+    resp = _upload(c, make_epub_bytes())
+    assert resp.status_code == 202
+    job_id = resp.json()["id"]
+    detail = c.get(f"/api/jobs/{job_id}").json()
+    # InlineRunner ran the pipeline synchronously before the response was returned.
+    assert detail["stages"]["package"] in ("done", "failed")
+    assert (jobs_dir / job_id / "source" / "book.epub").exists()
+
+
+def test_preflight_failure_leaves_no_job(client, make_epub_bytes):
+    c, jobs_dir = client
+    resp = _upload(c, make_epub_bytes(), tts_backend="nope")
+    assert resp.status_code == 400
+    assert "unknown" in resp.json()["detail"].lower()
+    assert list(jobs_dir.glob("*/job.json")) == []
+
+
+def test_bad_format_rejected(client, make_epub_bytes):
+    c, jobs_dir = client
+    assert _upload(c, make_epub_bytes(), formats="wav").status_code == 400
+    assert list(jobs_dir.glob("*/job.json")) == []
+
+
+def test_bad_mode_rejected(client, make_epub_bytes):
+    c, jobs_dir = client
+    assert _upload(c, make_epub_bytes(), mode="interpretive-dance").status_code == 400
+    assert list(jobs_dir.glob("*/job.json")) == []
+
+
+def test_unknown_llm_provider_rejected(client, make_epub_bytes):
+    c, jobs_dir = client
+    resp = _upload(c, make_epub_bytes(), use_llm="true", llm_provider="gpt")
+    assert resp.status_code == 400
+    assert list(jobs_dir.glob("*/job.json")) == []
+
+
+def test_llm_provider_is_persisted(client, make_epub_bytes, monkeypatch):
+    """Plan 2 gave jobs a provider; the upload form must not silently drop it."""
+    from audiobook_creator.process import llm as llm_pkg
+
+    class _Kimi:
+        name = "kimi"
+
+    monkeypatch.setattr(llm_pkg, "resolve_llm", lambda **kw: _Kimi())
+    c, jobs_dir = client
+    resp = _upload(c, make_epub_bytes(), use_llm="true", llm_provider="kimi")
+    assert resp.status_code == 202
+    job = Job.load(jobs_dir, resp.json()["id"])
+    assert job.state.config.llm_provider == "kimi"
+
+
+def test_upload_source_is_recorded_as_the_job_source(client, make_epub_bytes):
+    c, jobs_dir = client
+    job_id = _upload(c, make_epub_bytes()).json()["id"]
+    job = Job.load(jobs_dir, job_id)
+    assert Path(job.state.config.source).name == "book.epub"
+    assert Path(job.state.config.source).is_file()
+
+
+def test_hostile_upload_filename_is_contained(client, make_epub_bytes):
+    """The filename is attacker-controlled; it must not escape the job's source directory."""
+    c, jobs_dir = client
+    files = {"file": ("../../evil.epub", make_epub_bytes(), "application/epub+zip")}
+    data = {"mode": "verbatim", "tts_backend": "stub", "formats": "m4b", "use_llm": "false"}
+    resp = c.post("/api/jobs", files=files, data=data)
+    assert resp.status_code == 202
+    job = Job.load(jobs_dir, resp.json()["id"])
+    source = Path(job.state.config.source).resolve()
+    assert source.is_relative_to((jobs_dir / job.state.id).resolve())
+    assert not (jobs_dir.parent / "evil.epub").exists()
+
+
+def test_dot_only_upload_filename_does_not_target_the_directory(client, make_epub_bytes):
+    """safe_filename keeps dots, so ".." would resolve onto the source directory itself."""
+    c, jobs_dir = client
+    files = {"file": ("..", make_epub_bytes(), "application/epub+zip")}
+    data = {"mode": "verbatim", "tts_backend": "stub", "formats": "m4b", "use_llm": "false"}
+    resp = c.post("/api/jobs", files=files, data=data)
+    assert resp.status_code == 202
+    job = Job.load(jobs_dir, resp.json()["id"])
+    assert Path(job.state.config.source).name == "upload.bin"
+    assert Path(job.state.config.source).is_file()

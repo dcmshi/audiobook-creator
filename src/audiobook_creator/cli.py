@@ -60,65 +60,17 @@ def _run_pipeline(job: Job, from_stage: str | None = None) -> None:
         engine.run(job, from_stage=from_stage)
 
 
-def _preflight(
-    mode: Mode,
-    tts_backend: str,
-    local_only: bool,
-    llm_provider: str | None = None,
-    use_llm: bool = True,
-) -> None:
-    """Reject an unusable job before Job.create, so failure costs a second, not a stage run."""
-    from audiobook_creator.process import llm as llm_pkg
-    from audiobook_creator.synthesize.base import check_backend
-    from audiobook_creator.synthesize.kokoro import model_files_status
+def _preflight_or_exit(config: JobConfig) -> None:
+    """Thin wrapper over the shared preflight: print what it says, exit 2 if it refuses."""
+    from audiobook_creator.core.preflight import PreflightError, preflight
 
-    if llm_provider and not use_llm:
-        typer.echo("error: --llm and --no-llm cannot be used together", err=True)
-        raise typer.Exit(code=2)
-    if mode is not Mode.VERBATIM:
-        if not use_llm:
-            typer.echo(
-                f"error: mode {mode.value!r} needs an LLM; --no-llm only works with "
-                "--mode verbatim",
-                err=True,
-            )
-            raise typer.Exit(code=2)
-        # Constructed once and discarded: every client's constructor is a cheap probe, so
-        # this costs a socket check rather than a stage run.
-        try:
-            client = llm_pkg.resolve_llm(
-                local_only=local_only, use_llm=True, provider=llm_provider
-            )
-        except Exception as exc:  # noqa: BLE001 - PrivacyError and friends are user-facing
-            typer.echo(f"error: {exc}", err=True)
-            raise typer.Exit(code=2) from None
-        if client is None:
-            typer.echo(
-                f"error: mode {mode.value!r} needs an LLM: start Ollama, pass "
-                "--llm anthropic / --llm kimi (paid APIs, billed per token), "
-                "or use --mode verbatim",
-                err=True,
-            )
-            raise typer.Exit(code=2)
-        if mode is Mode.PODCAST and getattr(client, "name", "") == "ollama":
-            # Not a refusal: it works, it is just a poor fit. Podcast sends the whole book in
-            # one prompt and asks for one long script, which is where local models struggle.
-            typer.echo(
-                "warning: podcast mode on a local model covers only as much of the document "
-                "as fits its context window, and a full script can take about an hour on CPU. "
-                "Consider --llm anthropic or --llm kimi.",
-                err=True,
-            )
     try:
-        check_backend(tts_backend, local_only=local_only)
-    except Exception as exc:  # noqa: BLE001 - unknown name or privacy block, both user-facing
+        warnings = preflight(config)
+    except PreflightError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2) from None
-    if tts_backend == "kokoro":
-        status = model_files_status()
-        if status != "OK":
-            typer.echo(f"error: {status}", err=True)
-            raise typer.Exit(code=2)
+    for warning in warnings:
+        typer.echo(f"warning: {warning}", err=True)
 
 
 @app.command()
@@ -139,17 +91,6 @@ def convert(
     ),
     jobs_dir: Path = typer.Option(Path("jobs"), "--jobs-dir"),
 ) -> None:
-    if not source.startswith(("http://", "https://")) and not Path(source).is_file():
-        typer.echo(f"error: source file not found: {source}", err=True)
-        raise typer.Exit(code=2)
-    for fmt in formats:
-        if fmt not in ("mp3", "m4b"):
-            typer.echo(f"error: unknown format {fmt!r} (use mp3 or m4b)", err=True)
-            raise typer.Exit(code=2)
-    if llm is not None and llm not in ("anthropic", "kimi", "ollama"):
-        typer.echo(f"error: unknown --llm {llm!r} (use anthropic, kimi, or ollama)", err=True)
-        raise typer.Exit(code=2)
-    _preflight(mode, tts_backend, local_only, llm_provider=llm, use_llm=not no_llm)
     config = JobConfig(
         source=source,
         mode=mode,
@@ -160,6 +101,7 @@ def convert(
         llm_provider=llm,
         formats=formats,
     )
+    _preflight_or_exit(config)
     job = Job.create(jobs_dir, config)
     typer.echo(f"job {job.state.id}: {source}")
     _run_pipeline(job)

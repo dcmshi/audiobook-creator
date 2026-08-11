@@ -3,9 +3,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 
+from audiobook_creator.core import engine
 from audiobook_creator.core.job import Job
+from audiobook_creator.core.preflight import PreflightError, preflight
+from audiobook_creator.models import JobConfig, Mode
+from audiobook_creator.package.ffmpeg import safe_filename
 from audiobook_creator.web.runner import JobRunner
 
 # Job ids are the 8 hex characters Job.create mints. Matching that shape here is what makes
@@ -58,6 +62,54 @@ def create_app(jobs_dir: Path, runner: JobRunner | None = None) -> FastAPI:
                 }
             )
         return rows
+
+    @app.post("/api/jobs", status_code=202)
+    def create_job(
+        file: UploadFile,
+        mode: str = Form("verbatim"),
+        tts_backend: str = Form("kokoro"),
+        voice: str = Form("af_heart"),
+        formats: str = Form("m4b"),
+        local_only: bool = Form(False),
+        use_llm: bool = Form(True),
+        llm_provider: str = Form(""),
+    ) -> dict:
+        try:
+            job_mode = Mode(mode)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"unknown mode {mode!r}") from exc
+        # Preflighted with the uploaded filename standing in for the source: the bytes are
+        # still in the request, so check_source is off and nothing has touched disk yet.
+        config = JobConfig(
+            source=file.filename or "upload",
+            mode=job_mode,
+            tts_backend=tts_backend,
+            voice=voice,
+            local_only=local_only,
+            use_llm=use_llm,
+            llm_provider=llm_provider.strip() or None,
+            formats=[f.strip() for f in formats.split(",") if f.strip()],
+        )
+        try:
+            warnings = preflight(config, check_source=False)
+        except PreflightError as exc:
+            # Before Job.create on purpose: a refused job leaves no directory behind.
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
+        job = Job.create(jobs_dir, config)
+        source_dir = job.dir / "source"
+        source_dir.mkdir(exist_ok=True)
+        # The filename is attacker-controlled. safe_filename drops separators but keeps dots,
+        # so "..", "." and "" would still resolve onto the directory itself.
+        name = Path(safe_filename(file.filename or "upload")).name
+        if not name or set(name) <= {"."}:
+            name = "upload.bin"
+        dest = source_dir / name
+        dest.write_bytes(file.file.read())
+        job.state.config.source = str(dest)
+        job.save()
+        app.state.runner.submit(job.state.id, lambda: engine.run(job))
+        return {"id": job.state.id, "warnings": warnings}
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict:

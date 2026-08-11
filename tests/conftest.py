@@ -177,6 +177,16 @@ def _epub_with_extra_files(
 
 
 @pytest.fixture
+def make_epub_bytes(tmp_path: Path):
+    """The same book as make_epub, as bytes ready to upload."""
+
+    def _make() -> bytes:
+        return _build_epub(tmp_path / "upload-source.epub").read_bytes()
+
+    return _make
+
+
+@pytest.fixture
 def make_epub(tmp_path: Path):
     def _make() -> Path:
         return _build_epub(tmp_path / "test-book.epub")
