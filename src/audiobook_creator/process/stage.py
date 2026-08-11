@@ -76,8 +76,13 @@ def _run_podcast(job: Job) -> None:
     script = render_podcast(title, chapters, client, job.dir / "llm-cache")
     job.processed_dir.mkdir(parents=True, exist_ok=True)
     (job.processed_dir / "000.txt").write_text(script, encoding="utf-8")
-    # Only now replace the chapter set: a failed run must leave the job with its old chapters
-    # rather than neither set. These are re-derivable with --from-stage structure.
+    # Everything below replaces, rather than adds to, what an earlier mode left behind — and it
+    # runs only once the script is validated and written, so a failed run keeps the old job intact.
+    # A previous verbatim or rewrite run's per-chapter text would otherwise be narrated after the
+    # digest; these are re-derivable with --from-stage structure.
+    for path in job.processed_dir.glob("*.txt"):
+        if path.name != "000.txt":
+            path.unlink()
     digest = Chapter(index=0, title=f"{title} — Audio Digest", blocks=[])
     for path in job.chapters_dir.glob("*.json"):
         path.unlink()

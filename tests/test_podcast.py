@@ -133,3 +133,41 @@ def test_stage_keeps_old_chapters_when_the_script_is_invalid(tmp_path: Path, mon
     kept = sorted(job.chapters_dir.glob("*.json"))
     assert len(kept) == 1
     assert "Chapter One" in kept[0].read_text(encoding="utf-8")
+
+
+def _seed_job(tmp_path: Path, stale: int = 0) -> Job:
+    job = Job.create(tmp_path, JobConfig(source="x.epub", mode=Mode.PODCAST))
+    doc = Document(meta=DocumentMeta(title="Test Book"), blocks=[])
+    job.document_path.write_text(doc.model_dump_json(), encoding="utf-8")
+    for ch in _chapters():
+        (job.chapters_dir / f"{ch.index:03d}.json").write_text(
+            ch.model_dump_json(), encoding="utf-8"
+        )
+    job.processed_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(stale):
+        (job.processed_dir / f"{i:03d}.txt").write_text(f"stale chapter {i}", encoding="utf-8")
+    return job
+
+
+def test_stage_replaces_stale_processed_text_from_a_previous_mode(tmp_path: Path, monkeypatch):
+    """A --from-stage process re-run after switching modes must not leave orphan chapters."""
+    monkeypatch.setattr(llm_pkg, "resolve_llm", lambda **kw: PodcastLLM())
+    job = _seed_job(tmp_path, stale=3)
+    process_stage.run_stage(job)
+    assert [p.name for p in sorted(job.processed_dir.glob("*.txt"))] == ["000.txt"]
+    assert "[[speaker:1]]" in (job.processed_dir / "000.txt").read_text(encoding="utf-8")
+
+
+def test_stale_processed_text_survives_an_invalid_script(tmp_path: Path, monkeypatch):
+    """The deletion carries the same ordering guarantee as the chapters/ replacement."""
+
+    class BadLLM(PodcastLLM):
+        def complete(self, user, *, system=None, max_tokens=2048):
+            return "no tags here"
+
+    monkeypatch.setattr(llm_pkg, "resolve_llm", lambda **kw: BadLLM())
+    job = _seed_job(tmp_path, stale=3)
+    with pytest.raises(LLMError):
+        process_stage.run_stage(job)
+    kept = sorted(p.name for p in job.processed_dir.glob("*.txt"))
+    assert kept == ["000.txt", "001.txt", "002.txt"]
