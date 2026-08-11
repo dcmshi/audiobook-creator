@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -124,6 +125,11 @@ def document_from_docling(dl_doc, assets_dir: Path | None = None) -> Document:
 
 
 def ingest_with_docling(source: str, assets_dir: Path) -> Document:
+    # docling's layout model runs through torch.compile, and Inductor shells out to MSVC.
+    # On a Windows box without cl.exe on PATH that aborts PDF ingest outright
+    # (InvalidCxxCompiler: cl not found), so eager execution is the safe default here.
+    # setdefault, not assignment: anyone who has set it deliberately keeps their value.
+    os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
     try:
         from docling.document_converter import DocumentConverter
     except ImportError as exc:

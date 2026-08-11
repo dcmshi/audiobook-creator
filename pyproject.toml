@@ -33,7 +33,7 @@ testpaths = ["tests"]
 markers = [
     "docling: requires docling installed and a sample PDF (skipped by default)",
     "kokoro: requires kokoro model files under models/ (skipped by default)",
-    "llm_live: hits the real Anthropic API (needs key; deselected by default)",
+    "llm_live: hits a real LLM API (needs a key; deselected by default)",
 ]
 addopts = "-m 'not docling and not kokoro and not llm_live' --strict-markers"
 

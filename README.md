@@ -16,6 +16,11 @@ markers — using local-first TTS. Runs entirely on your machine.
 
   Set `ABC_MODELS_DIR` to keep them elsewhere.
 
+> **PDF ingest on Windows.** docling's layout model compiles through PyTorch
+> Inductor, which shells out to MSVC. Without `cl.exe` on `PATH` that aborts the
+> run, so `TORCHDYNAMO_DISABLE=1` is set for you before docling loads. Set it
+> yourself to override.
+
 ## Setup
 
     uv sync                 # base install (EPUB support)
@@ -68,7 +73,7 @@ refuse to start rather than spending money you did not authorise.
 > separately, per token, against an API key you create yourself. This is exactly
 > why paid providers are opt-in per job.
 
-Rough cost for a full book: **`claude-opus-5` ≈ $5–15**; **`kimi-k2.6` ≈ 5x
+Rough cost for a full book, as of 2026-08: **`claude-opus-5` ≈ $5–15**; **`kimi-k2.6` ≈ 5x
 cheaper**; **`claude-haiku-4-5`** is Anthropic's cheap tier
 (`ABC_LLM_MODEL=claude-haiku-4-5`). `ollama` is free but slow on a CPU — fine
 for `verbatim` and `rewrite`, which are chunked, and painful for `podcast`,

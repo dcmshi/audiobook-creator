@@ -227,3 +227,34 @@ def test_fallback_preserves_comparison_operators_across_blocks(tmp_path: Path):
 def test_fallback_keeps_paragraph_break_before_heading(tmp_path: Path):
     out = render_rewrite(_chapter(tmp_path), HeadingVisionLLM(), tmp_path / "cache")
     assert "First part.\n\nSecond part heading" in out
+
+
+def test_windows_group_blocks_under_the_char_limit():
+    """Pins the grouping that keeps each request inside the window budget."""
+    from audiobook_creator.process.rewrite import _windows
+
+    assert _windows(["x" * 2500, "y" * 2500, "z" * 2500, "w" * 100]) == [[0, 1], [2, 3]]
+    assert _windows(["q" * 9000]) == [[0]]  # one oversized block stays whole
+    assert _windows([]) == []
+
+
+def test_vision_cache_is_keyed_on_image_bytes_not_path(tmp_path: Path):
+    """A spend control: re-ingesting a book renumbers fig-NNN, and descriptions cost money."""
+    calls: list[Path] = []
+
+    class CountingVisionLLM(ScriptedLLM):
+        def describe_image(self, image_path, prompt, *, max_tokens=1024):
+            calls.append(image_path)
+            return "a chart showing a rise"
+
+    llm = CountingVisionLLM()
+    for name in ("fig-000.png", "fig-007.png", "fig-000.png"):
+        path = tmp_path / name
+        path.write_bytes(b"IDENTICAL-BYTES")
+        chapter = Chapter(
+            index=0,
+            title="T",
+            blocks=[Block(type=BlockType.FIGURE, text="caption", image_path=str(path))],
+        )
+        render_rewrite(chapter, llm, tmp_path / "cache")
+    assert len(calls) == 1

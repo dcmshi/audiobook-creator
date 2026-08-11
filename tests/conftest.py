@@ -70,6 +70,24 @@ _REFS = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
+_ABC_ENV_VARS = (
+    "ABC_LLM_MODEL",
+    "ABC_KIMI_MODEL",
+    "ABC_KIMI_URL",
+    "ABC_OLLAMA_MODEL",
+    "ABC_OLLAMA_URL",
+    "ABC_OLLAMA_NUM_CTX",
+)
+
+
+@pytest.fixture(autouse=True)
+def clean_abc_env(monkeypatch):
+    """Provider defaults are read from the environment; pin them so a developer's shell
+    cannot change what the suite asserts. ABC_LLM has its own fixture below."""
+    for name in _ABC_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def no_implicit_llm(monkeypatch):
     """Keep the suite hermetic and deterministic.
