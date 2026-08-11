@@ -124,21 +124,37 @@ def refine_matter_with_llm(chapters: list[Chapter], client) -> list[Chapter]:
         logger.warning("chapter tiebreaker reply had no usable labels, keeping rule-based matter")
         return chapters
 
-    by_index = {c.index: c for c in chapters}
     total = len(chapters)
+    accepted: dict[int, Matter] = {}
     for position, chapter in enumerate(chapters):
         label = proposed.get(chapter.index)
-        if label is None or chapter.index not in by_index:
+        if label is None:
             continue
         if _allowed(position, total, chapter.matter, label):
-            logger.info(
-                "tiebreaker: chapter %d %r %s -> %s",
-                chapter.index, chapter.title, chapter.matter.value, label.value,
-            )
-            chapter.matter = label
+            accepted[position] = label
         elif label is not chapter.matter:
             logger.info(
                 "tiebreaker: rejected %r for mid-document chapter %d %r",
                 label.value, chapter.index, chapter.title,
             )
+    if not accepted:
+        return chapters
+
+    # The windows bound where a flip may happen; this states the invariant they approximate.
+    # In a short book the windows can cover every chapter, and a book with no body matter
+    # narrates nothing at all — so the flips are accepted or rejected as a set.
+    outcome = [accepted.get(i, c.matter) for i, c in enumerate(chapters)]
+    if not any(matter is Matter.BODY for matter in outcome):
+        logger.warning(
+            "chapter tiebreaker would leave no body chapters; keeping rule-based matter"
+        )
+        return chapters
+
+    for position, label in accepted.items():
+        chapter = chapters[position]
+        logger.info(
+            "tiebreaker: chapter %d %r %s -> %s",
+            chapter.index, chapter.title, chapter.matter.value, label.value,
+        )
+        chapter.matter = label
     return chapters

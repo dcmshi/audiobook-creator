@@ -213,3 +213,14 @@ def test_prompt_within_the_context_window_is_quiet(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         client.complete("a short prompt")
     assert caplog.text == ""
+
+
+def test_generation_budget_counts_against_the_context_window(monkeypatch, caplog):
+    """num_ctx bounds prompt plus generation: podcast's 16k budget alone overflows the default."""
+    fake = _FakeHTTP()
+    monkeypatch.setattr(ollama_client.request, "urlopen", fake)
+    client = ollama_client.OllamaClient()
+    with caplog.at_level(logging.WARNING):
+        client.complete("a short source", max_tokens=16000)
+    assert "8192" in caplog.text
+    assert any("token" in r.getMessage() for r in caplog.records)

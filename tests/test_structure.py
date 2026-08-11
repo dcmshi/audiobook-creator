@@ -142,3 +142,38 @@ def test_llm_tiebreaker_survives_a_failing_client():
     before = _edge_chapters()
     out = refine_matter_with_llm(before, BrokenLLM())
     assert [c.matter for c in out] == [c.matter for c in before]
+
+
+def test_llm_tiebreaker_refuses_to_empty_the_body():
+    """Flipping every chapter out of BODY would leave nothing to narrate."""
+    from audiobook_creator.structure.chapters import refine_matter_with_llm
+
+    before = [
+        Chapter(index=0, title="Preface", blocks=[_p("a")]),
+        Chapter(index=1, title="Middle", blocks=[_p("b")]),
+        Chapter(index=2, title="Appendix", blocks=[_p("c")]),
+    ]
+    out = refine_matter_with_llm(before, _TiebreakLLM(reply="0: front\n1: front\n2: back"))
+    assert [c.matter for c in out] == [Matter.BODY] * 3
+
+
+def test_llm_tiebreaker_refuses_to_reclassify_a_single_chapter_document():
+    from audiobook_creator.structure.chapters import refine_matter_with_llm
+
+    out = refine_matter_with_llm(
+        [Chapter(index=0, title="Everything", blocks=[_p("a")])],
+        _TiebreakLLM(reply="0: front"),
+    )
+    assert out[0].matter is Matter.BODY
+
+
+def test_llm_tiebreaker_still_applies_flips_that_leave_body_behind():
+    from audiobook_creator.structure.chapters import refine_matter_with_llm
+
+    before = [
+        Chapter(index=0, title="Preface", blocks=[_p("a")]),
+        Chapter(index=1, title="Middle", blocks=[_p("b")]),
+        Chapter(index=2, title="Appendix", blocks=[_p("c")]),
+    ]
+    out = refine_matter_with_llm(before, _TiebreakLLM(reply="0: front\n2: back"))
+    assert [c.matter for c in out] == [Matter.FRONT, Matter.BODY, Matter.BACK]

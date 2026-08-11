@@ -281,3 +281,29 @@ def test_doctor_reports_llm_providers(monkeypatch):
     assert "anthropic:" in result.output
     assert "kimi:" in result.output
     assert "ollama:" in result.output
+
+
+def test_resume_resolves_llm_with_the_persisted_provider(monkeypatch, make_epub, tmp_path: Path):
+    """A job created with --llm kimi must keep asking for kimi when resumed."""
+    from audiobook_creator.process import llm as llm_pkg
+
+    seen: list[str | None] = []
+
+    def fake_resolve(*, local_only, use_llm, provider=None):
+        seen.append(provider)
+        return None  # rule-based path: verbatim still completes
+
+    monkeypatch.setattr(llm_pkg, "resolve_llm", fake_resolve)
+    jobs_dir = tmp_path / "jobs"
+    runner.invoke(
+        app,
+        ["convert", str(make_epub()), "--llm", "kimi", "--tts-backend", "stub",
+         "--jobs-dir", str(jobs_dir)],
+    )
+    job_id = next(p.parent.name for p in jobs_dir.glob("*/job.json"))
+    seen.clear()
+    result = runner.invoke(
+        app, ["resume", job_id, "--jobs-dir", str(jobs_dir), "--from-stage", "structure"]
+    )
+    assert result.exit_code == 0
+    assert seen and all(provider == "kimi" for provider in seen)
