@@ -10,6 +10,9 @@ dependencies = [
     "numpy>=2.0",
     "kokoro-onnx>=0.4",
     "anthropic>=0.116",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -19,7 +22,11 @@ pdf = ["docling>=2.0"]
 abc = "audiobook_creator.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.5"]
+dev = [
+    "httpx2>=2.10.0",
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
 
 [build-system]
 requires = ["hatchling"]
