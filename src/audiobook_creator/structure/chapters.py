@@ -1,4 +1,9 @@
+import logging
+import re
+
 from audiobook_creator.models import Block, BlockType, Chapter, Document, Matter
+
+logger = logging.getLogger(__name__)
 
 # Ordinary English words must match the whole title. "Notes on a Scandal" and
 # "Index Funds Explained" are body chapters, and misfiling one here deletes it:
@@ -64,4 +69,76 @@ def split_chapters(doc: Document) -> list[Chapter]:
         )
         if level2_count >= 2:
             chapters = _split_at_level(doc, max_level=2)
+    return chapters
+
+
+TIEBREAK_PROMPT = (
+    "Classify each chapter title as front (title pages, contents, dedications), "
+    "body (the actual content), or back (references, index, appendices). "
+    'Reply with one line per chapter: "<index>: front|body|back". Titles:\n'
+)
+
+_MATTER_WORDS = {"front": Matter.FRONT, "body": Matter.BODY, "back": Matter.BACK}
+_LABEL_LINE = re.compile(r"^\s*(\d+)\s*:\s*(front|body|back)\s*$", re.IGNORECASE)
+
+# Front matter runs at the start and back matter at the end; a chapter in the middle being
+# relabelled away from BODY is how a real chapter goes silent, so only the edges may do it.
+_FRONT_EDGE = 2
+_BACK_EDGE = 3
+
+
+def _allowed(index: int, total: int, current: Matter, proposed: Matter) -> bool:
+    if proposed is current:
+        return False
+    if proposed is Matter.BODY:
+        return True  # rescuing content is always safe: the worst case is narrating too much
+    # The midpoint guard matters only for short books, where a fixed window would otherwise
+    # cover the whole document: in a four-chapter book "the last three" reaches index 1.
+    midpoint = total / 2
+    if proposed is Matter.FRONT:
+        return index < _FRONT_EDGE and index < midpoint
+    return index >= total - _BACK_EDGE and index > midpoint
+
+
+def refine_matter_with_llm(chapters: list[Chapter], client) -> list[Chapter]:
+    """Let an LLM re-label front/body/back, gated so it can never silence a real chapter.
+
+    Any failure — a client error, an unparsable reply, a label for an unknown index —
+    leaves the rule-based classification untouched.
+    """
+    if not chapters:
+        return chapters
+    titles = "\n".join(f"{c.index}. {c.title}" for c in chapters)
+    try:
+        reply = client.complete(TIEBREAK_PROMPT + titles)
+    except Exception as exc:  # noqa: BLE001 - a tiebreaker must never fail the stage
+        logger.warning("chapter tiebreaker unavailable, keeping rule-based matter: %s", exc)
+        return chapters
+
+    proposed: dict[int, Matter] = {}
+    for line in reply.splitlines():
+        match = _LABEL_LINE.match(line)
+        if match:
+            proposed[int(match.group(1))] = _MATTER_WORDS[match.group(2).lower()]
+    if not proposed:
+        logger.warning("chapter tiebreaker reply had no usable labels, keeping rule-based matter")
+        return chapters
+
+    by_index = {c.index: c for c in chapters}
+    total = len(chapters)
+    for position, chapter in enumerate(chapters):
+        label = proposed.get(chapter.index)
+        if label is None or chapter.index not in by_index:
+            continue
+        if _allowed(position, total, chapter.matter, label):
+            logger.info(
+                "tiebreaker: chapter %d %r %s -> %s",
+                chapter.index, chapter.title, chapter.matter.value, label.value,
+            )
+            chapter.matter = label
+        elif label is not chapter.matter:
+            logger.info(
+                "tiebreaker: rejected %r for mid-document chapter %d %r",
+                label.value, chapter.index, chapter.title,
+            )
     return chapters

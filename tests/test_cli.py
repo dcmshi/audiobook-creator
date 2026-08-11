@@ -180,3 +180,104 @@ def test_preview_requires_processed_text(tmp_path: Path):
     result = runner.invoke(app, ["preview", job.state.id, "--jobs-dir", str(jobs_dir)])
     assert result.exit_code == 0, result.output
     assert (job.output_dir / "preview.wav").exists()
+
+
+class _DummyLLM:
+    name = "fake"
+
+
+def _resolves_to(client):
+    return lambda **kw: client
+
+
+def test_rewrite_mode_unlocks_with_llm(monkeypatch, make_epub, tmp_path: Path):
+    from audiobook_creator.process import llm as llm_pkg
+
+    monkeypatch.setattr(llm_pkg, "resolve_llm", _resolves_to(_DummyLLM()))
+    result = runner.invoke(
+        app,
+        ["convert", str(make_epub()), "--mode", "rewrite", "--tts-backend", "stub",
+         "--jobs-dir", str(tmp_path / "jobs")],
+    )
+    assert "needs an LLM" not in result.output
+
+
+def test_rewrite_mode_blocks_without_llm(monkeypatch, make_epub, tmp_path: Path):
+    from audiobook_creator.process import llm as llm_pkg
+
+    monkeypatch.setattr(llm_pkg, "resolve_llm", _resolves_to(None))
+    result = runner.invoke(
+        app,
+        ["convert", str(make_epub()), "--mode", "rewrite", "--jobs-dir", str(tmp_path / "jobs")],
+    )
+    assert result.exit_code == 2
+    assert "needs an LLM" in result.output
+    assert not (tmp_path / "jobs").exists()
+
+
+def test_no_llm_flag_sets_config(make_epub, tmp_path: Path):
+    runner.invoke(
+        app,
+        ["convert", str(make_epub()), "--no-llm", "--tts-backend", "stub",
+         "--jobs-dir", str(tmp_path / "jobs")],
+    )
+    job_json = next((tmp_path / "jobs").glob("*/job.json")).read_text(encoding="utf-8")
+    assert '"use_llm": false' in job_json
+
+
+def test_llm_flag_persists_provider(monkeypatch, make_epub, tmp_path: Path):
+    from audiobook_creator.process import llm as llm_pkg
+
+    monkeypatch.setattr(llm_pkg, "resolve_llm", _resolves_to(_DummyLLM()))
+    runner.invoke(
+        app,
+        ["convert", str(make_epub()), "--llm", "kimi", "--tts-backend", "stub",
+         "--jobs-dir", str(tmp_path / "jobs")],
+    )
+    job_json = next((tmp_path / "jobs").glob("*/job.json")).read_text(encoding="utf-8")
+    assert '"llm_provider": "kimi"' in job_json
+
+
+def test_no_llm_with_rewrite_is_rejected(make_epub, tmp_path: Path):
+    result = runner.invoke(
+        app,
+        ["convert", str(make_epub()), "--mode", "rewrite", "--no-llm",
+         "--jobs-dir", str(tmp_path / "jobs")],
+    )
+    assert result.exit_code == 2
+    assert not (tmp_path / "jobs").exists()
+
+
+def test_llm_and_no_llm_together_are_rejected(make_epub, tmp_path: Path):
+    result = runner.invoke(
+        app,
+        ["convert", str(make_epub()), "--llm", "kimi", "--no-llm",
+         "--jobs-dir", str(tmp_path / "jobs")],
+    )
+    assert result.exit_code == 2
+    assert not (tmp_path / "jobs").exists()
+
+
+def test_podcast_on_ollama_warns_but_proceeds(monkeypatch, make_epub, tmp_path: Path):
+    from audiobook_creator.process import llm as llm_pkg
+
+    class _Ollama:
+        name = "ollama"
+
+    monkeypatch.setattr(llm_pkg, "resolve_llm", _resolves_to(_Ollama()))
+    result = runner.invoke(
+        app,
+        ["convert", str(make_epub()), "--mode", "podcast", "--tts-backend", "stub",
+         "--jobs-dir", str(tmp_path / "jobs")],
+    )
+    assert "needs an LLM" not in result.output
+    assert "--llm anthropic" in result.output  # a warning, not a refusal
+
+
+def test_doctor_reports_llm_providers(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+    result = runner.invoke(app, ["doctor"])
+    assert "anthropic:" in result.output
+    assert "kimi:" in result.output
+    assert "ollama:" in result.output

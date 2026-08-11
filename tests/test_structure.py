@@ -89,3 +89,56 @@ def test_run_stage_writes_chapter_files(tmp_path: Path):
     assert [f.name for f in files] == ["000.json", "001.json"]
     ch1 = Chapter.model_validate_json(files[1].read_text(encoding="utf-8"))
     assert ch1.matter is Matter.BACK
+
+
+class _TiebreakLLM:
+    name = "fake"
+    model = "m"
+
+    def __init__(self, reply: str = "0: front\n1: body\n2: back\n3: back"):
+        self.reply = reply
+
+    def complete(self, user, *, system=None, max_tokens=2048):
+        return self.reply
+
+    def describe_image(self, p, q, *, max_tokens=1024):
+        return ""
+
+
+def _edge_chapters() -> list[Chapter]:
+    return [
+        Chapter(index=0, title="Copyright", matter=Matter.FRONT, blocks=[]),
+        Chapter(index=1, title="Notes", matter=Matter.BACK, blocks=[_p("real content")]),
+        Chapter(index=2, title="The Middle", blocks=[_p("x")]),
+        Chapter(index=3, title="Sources", blocks=[_p("bibliography text")]),
+    ]
+
+
+def test_llm_tiebreaker_rescues_body_and_respects_edge_gate():
+    from audiobook_creator.structure.chapters import refine_matter_with_llm
+
+    out = refine_matter_with_llm(_edge_chapters(), _TiebreakLLM())
+    assert out[1].matter is Matter.BODY  # rescued: to-BODY is always allowed
+    assert out[2].matter is Matter.BODY  # mid-document flip to BACK rejected
+    assert out[3].matter is Matter.BACK  # last-3 edge: flip accepted
+
+
+def test_llm_tiebreaker_returns_input_unchanged_on_unparsable_reply():
+    from audiobook_creator.structure.chapters import refine_matter_with_llm
+
+    before = _edge_chapters()
+    out = refine_matter_with_llm(before, _TiebreakLLM(reply="I could not classify these."))
+    assert [c.matter for c in out] == [c.matter for c in before]
+
+
+def test_llm_tiebreaker_survives_a_failing_client():
+    from audiobook_creator.process.llm.base import LLMError
+    from audiobook_creator.structure.chapters import refine_matter_with_llm
+
+    class BrokenLLM(_TiebreakLLM):
+        def complete(self, user, *, system=None, max_tokens=2048):
+            raise LLMError("down")
+
+    before = _edge_chapters()
+    out = refine_matter_with_llm(before, BrokenLLM())
+    assert [c.matter for c in out] == [c.matter for c in before]

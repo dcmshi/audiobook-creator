@@ -1,6 +1,7 @@
 import http.client
 import io
 import json
+import logging
 
 import pytest
 
@@ -173,3 +174,42 @@ def test_non_http_service_on_port_raises_llm_error(monkeypatch):
     monkeypatch.setattr(ollama_client.request, "urlopen", bad_status)
     with pytest.raises(LLMError, match="Ollama not reachable"):
         ollama_client.OllamaClient()
+
+
+def test_payload_declares_the_context_window(monkeypatch):
+    fake = _FakeHTTP()
+    monkeypatch.setattr(ollama_client.request, "urlopen", fake)
+    monkeypatch.setenv("ABC_OLLAMA_NUM_CTX", "4096")
+    client = ollama_client.OllamaClient()
+    client.complete("x")
+    _url, data = fake.requests[-1]
+    assert json.loads(data)["options"]["num_ctx"] == 4096
+
+
+def test_default_context_window_is_declared(monkeypatch):
+    fake = _FakeHTTP()
+    monkeypatch.setattr(ollama_client.request, "urlopen", fake)
+    client = ollama_client.OllamaClient()
+    client.complete("x")
+    _url, data = fake.requests[-1]
+    assert json.loads(data)["options"]["num_ctx"] == 8192
+
+
+def test_prompt_larger_than_the_context_window_warns(monkeypatch, caplog):
+    fake = _FakeHTTP()
+    monkeypatch.setattr(ollama_client.request, "urlopen", fake)
+    monkeypatch.setenv("ABC_OLLAMA_NUM_CTX", "1024")
+    client = ollama_client.OllamaClient()
+    with caplog.at_level(logging.WARNING):
+        client.complete("word " * 2000)  # ~10000 chars -> ~3333 tokens
+    assert "1024" in caplog.text  # names the window
+    assert any("token" in r.getMessage() for r in caplog.records)  # and the estimate
+
+
+def test_prompt_within_the_context_window_is_quiet(monkeypatch, caplog):
+    fake = _FakeHTTP()
+    monkeypatch.setattr(ollama_client.request, "urlopen", fake)
+    client = ollama_client.OllamaClient()
+    with caplog.at_level(logging.WARNING):
+        client.complete("a short prompt")
+    assert caplog.text == ""

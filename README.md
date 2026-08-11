@@ -37,6 +37,71 @@ markers — using local-first TTS. Runs entirely on your machine.
 
 Outputs land in `jobs/<job-id>/output/`.
 
+## LLM-powered modes
+
+Three text modes. `verbatim` needs no LLM; the other two do.
+
+| Mode | What it produces | LLM |
+|---|---|---|
+| `verbatim` (default) | The book read as written, with abbreviations, numbers and citation markers cleaned up | Optional — improves the cleanup, falls back to rules |
+| `rewrite` | The same content re-expressed for listening: tables summarised aloud, figures described, citations spoken naturally | Required |
+| `podcast` | A two-host conversation covering the whole document, rendered in two voices | Required |
+
+    uv run abc convert book.epub --mode rewrite
+    uv run abc convert paper.pdf --mode podcast --llm anthropic
+    uv run abc convert book.epub --no-llm                  # rule-based text only
+
+### Providers
+
+| Provider | Cost | How it is chosen |
+|---|---|---|
+| `ollama` | Free, runs on your machine | **Default.** Used automatically when Ollama is running |
+| `anthropic` | Paid API | Only with `--llm anthropic` or `ABC_LLM=anthropic` |
+| `kimi` | Paid API | Only with `--llm kimi` or `ABC_LLM=kimi` |
+
+A paid provider never runs unless you ask for it. With no flag and no Ollama
+running, `verbatim` quietly uses its rule-based path and the other two modes
+refuse to start rather than spending money you did not authorise.
+
+> **Billing warning — a chat subscription is not API access.** Claude Pro/Max
+> and Kimi memberships do **not** include API usage. Both vendors bill the API
+> separately, per token, against an API key you create yourself. This is exactly
+> why paid providers are opt-in per job.
+
+Rough cost for a full book: **`claude-opus-5` ≈ $5–15**; **`kimi-k2.6` ≈ 5x
+cheaper**; **`claude-haiku-4-5`** is Anthropic's cheap tier
+(`ABC_LLM_MODEL=claude-haiku-4-5`). `ollama` is free but slow on a CPU — fine
+for `verbatim` and `rewrite`, which are chunked, and painful for `podcast`,
+which asks for one long script in a single call.
+
+### Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic credentials |
+| `ABC_LLM_MODEL` | Anthropic model (default `claude-opus-5`) |
+| `MOONSHOT_API_KEY` | Kimi credentials |
+| `ABC_KIMI_MODEL` | Kimi model (default `kimi-k2.6`) |
+| `ABC_KIMI_URL` | Kimi endpoint (default `https://api.moonshot.ai/v1`) |
+| `ABC_OLLAMA_MODEL` | Ollama model (default `qwen3:14b`) |
+| `ABC_OLLAMA_URL` | Ollama endpoint (default `http://localhost:11434`) |
+| `ABC_OLLAMA_NUM_CTX` | Ollama context window (default `8192`) |
+| `ABC_LLM` | Force a provider without the flag: `anthropic`, `kimi`, `ollama`, or `none` |
+
+`uv run abc doctor` reports which of the three are usable.
+
+### Privacy
+
+`--local-only` hard-blocks every network backend for that job, so work
+documents stay on the machine. Under `--local-only` the Anthropic and Kimi
+providers are refused outright, and Ollama is accepted only when its URL points
+at this machine — a LAN or hosted Ollama is still off-box and is rejected
+before a single request is sent.
+
+`--no-llm` skips the LLM entirely and uses the rule-based text path. It applies
+to `verbatim` only; the other two modes have nothing to fall back to and will
+tell you so.
+
 ## The job directory
 
 Every conversion is a resumable job with inspectable intermediate files:
@@ -70,7 +135,8 @@ chapter was misclassified, edit its `"matter"` field in
 
 ## Project status
 
-v0.1 (Plan 1 of 3): verbatim narration with rule-based cleanup, Kokoro local
-TTS, EPUB + PDF ingest, MP3/M4B packaging. Coming next: LLM-powered modes
-(spoken-friendly rewrite, podcast digest, figure/table verbalization) and a web
-UI. Design docs live in `docs/superpowers/specs/`.
+v0.2 (Plans 1-2 of 3): verbatim narration with rule-based cleanup, Kokoro
+local TTS, EPUB + PDF ingest, MP3/M4B packaging, plus the LLM layer —
+spoken-friendly `rewrite`, two-voice `podcast`, figure and table verbalization,
+and figure descriptions via vision. Coming next: a web UI. Design docs live in
+`docs/superpowers/specs/`.

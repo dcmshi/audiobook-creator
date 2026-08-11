@@ -1,6 +1,7 @@
 import http.client
 import ipaddress
 import json
+import logging
 import os
 from pathlib import Path
 from urllib import request
@@ -9,10 +10,24 @@ from urllib.parse import urlparse
 from audiobook_creator.process.llm.base import LLMError, LLMUnsupported
 
 _DEFAULT_URL = "http://localhost:11434"
+# Ollama's own default is small and applied invisibly; 8192 matches what the shipped models
+# handle comfortably. A conservative 3 chars per token keeps the estimate on the safe side.
+_DEFAULT_NUM_CTX = 8192
+_CHARS_PER_TOKEN = 3
+
+logger = logging.getLogger(__name__)
 
 
 def base_url() -> str:
     return os.environ.get("ABC_OLLAMA_URL", _DEFAULT_URL).rstrip("/")
+
+
+def _num_ctx() -> int:
+    try:
+        return int(os.environ.get("ABC_OLLAMA_NUM_CTX", _DEFAULT_NUM_CTX))
+    except ValueError:
+        logger.warning("ignoring non-numeric ABC_OLLAMA_NUM_CTX; using %d", _DEFAULT_NUM_CTX)
+        return _DEFAULT_NUM_CTX
 
 
 def is_local_endpoint() -> bool:
@@ -55,6 +70,17 @@ class OllamaClient:
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": user})
+        # Declared rather than left to the server default: Ollama silently drops whatever does
+        # not fit, so an undeclared window turns a too-long chapter into quietly missing text.
+        num_ctx = _num_ctx()
+        estimated_tokens = sum(len(m["content"]) for m in messages) // _CHARS_PER_TOKEN
+        if estimated_tokens > num_ctx:
+            logger.warning(
+                "prompt is roughly %d tokens but the Ollama context window is %d; the overflow "
+                "will be dropped silently. Raise ABC_OLLAMA_NUM_CTX or use a smaller input.",
+                estimated_tokens,
+                num_ctx,
+            )
         payload = json.dumps(
             {
                 "model": self.model,
@@ -63,7 +89,7 @@ class OllamaClient:
                 # Thinking models (qwen3) otherwise spend num_predict on reasoning and return
                 # empty content. The pipeline needs speakable prose, not reasoning.
                 "think": False,
-                "options": {"num_predict": max_tokens},
+                "options": {"num_predict": max_tokens, "num_ctx": num_ctx},
             }
         ).encode("utf-8")
         req = request.Request(

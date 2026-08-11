@@ -60,17 +60,55 @@ def _run_pipeline(job: Job, from_stage: str | None = None) -> None:
         engine.run(job, from_stage=from_stage)
 
 
-def _preflight(mode: Mode, tts_backend: str, local_only: bool) -> None:
+def _preflight(
+    mode: Mode,
+    tts_backend: str,
+    local_only: bool,
+    llm_provider: str | None = None,
+    use_llm: bool = True,
+) -> None:
     """Reject an unusable job before Job.create, so failure costs a second, not a stage run."""
+    from audiobook_creator.process import llm as llm_pkg
     from audiobook_creator.synthesize.base import check_backend
     from audiobook_creator.synthesize.kokoro import model_files_status
 
-    if mode is not Mode.VERBATIM:
-        typer.echo(
-            f"error: mode {mode.value!r} is not implemented yet; only 'verbatim' works today",
-            err=True,
-        )
+    if llm_provider and not use_llm:
+        typer.echo("error: --llm and --no-llm cannot be used together", err=True)
         raise typer.Exit(code=2)
+    if mode is not Mode.VERBATIM:
+        if not use_llm:
+            typer.echo(
+                f"error: mode {mode.value!r} needs an LLM; --no-llm only works with "
+                "--mode verbatim",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        # Constructed once and discarded: every client's constructor is a cheap probe, so
+        # this costs a socket check rather than a stage run.
+        try:
+            client = llm_pkg.resolve_llm(
+                local_only=local_only, use_llm=True, provider=llm_provider
+            )
+        except Exception as exc:  # noqa: BLE001 - PrivacyError and friends are user-facing
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=2) from None
+        if client is None:
+            typer.echo(
+                f"error: mode {mode.value!r} needs an LLM: start Ollama, pass "
+                "--llm anthropic / --llm kimi (paid APIs, billed per token), "
+                "or use --mode verbatim",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        if mode is Mode.PODCAST and getattr(client, "name", "") == "ollama":
+            # Not a refusal: it works, it is just a poor fit. Podcast sends the whole book in
+            # one prompt and asks for one long script, which is where local models struggle.
+            typer.echo(
+                "warning: podcast mode on a local model covers only as much of the document "
+                "as fits its context window, and a full script can take about an hour on CPU. "
+                "Consider --llm anthropic or --llm kimi.",
+                err=True,
+            )
     try:
         check_backend(tts_backend, local_only=local_only)
     except Exception as exc:  # noqa: BLE001 - unknown name or privacy block, both user-facing
@@ -93,6 +131,12 @@ def convert(
     local_only: bool = typer.Option(
         False, "--local-only", help="Hard-block all network backends for this job"
     ),
+    llm: str = typer.Option(
+        None, "--llm", help="anthropic | kimi | ollama (paid APIs are billed per token)"
+    ),
+    no_llm: bool = typer.Option(
+        False, "--no-llm", help="Rule-based text only; verbatim mode only"
+    ),
     jobs_dir: Path = typer.Option(Path("jobs"), "--jobs-dir"),
 ) -> None:
     if not source.startswith(("http://", "https://")) and not Path(source).is_file():
@@ -102,13 +146,18 @@ def convert(
         if fmt not in ("mp3", "m4b"):
             typer.echo(f"error: unknown format {fmt!r} (use mp3 or m4b)", err=True)
             raise typer.Exit(code=2)
-    _preflight(mode, tts_backend, local_only)
+    if llm is not None and llm not in ("anthropic", "kimi", "ollama"):
+        typer.echo(f"error: unknown --llm {llm!r} (use anthropic, kimi, or ollama)", err=True)
+        raise typer.Exit(code=2)
+    _preflight(mode, tts_backend, local_only, llm_provider=llm, use_llm=not no_llm)
     config = JobConfig(
         source=source,
         mode=mode,
         tts_backend=tts_backend,
         voice=voice,
         local_only=local_only,
+        use_llm=not no_llm,
+        llm_provider=llm,
         formats=formats,
     )
     job = Job.create(jobs_dir, config)
@@ -200,6 +249,23 @@ def doctor() -> None:
     from audiobook_creator.synthesize.kokoro import model_files_status
 
     typer.echo(f"kokoro models: {model_files_status()}")
+
+    # None of these affects the exit code: every LLM provider is optional, and the rule-based
+    # verbatim path works with none of them configured.
+    import os
+
+    from audiobook_creator.process.llm.base import LLMError
+    from audiobook_creator.process.llm.ollama_client import OllamaClient, base_url
+
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    typer.echo(f"anthropic: {'OK (key found)' if anthropic_key else 'not configured'}")
+    kimi_key = os.environ.get("MOONSHOT_API_KEY")
+    typer.echo(f"kimi: {'OK (key found)' if kimi_key else 'not configured'}")
+    try:
+        OllamaClient()
+        typer.echo(f"ollama: OK ({base_url()})")
+    except LLMError:
+        typer.echo(f"ollama: not reachable ({base_url()})")
 
     raise typer.Exit(code=1 if problems else 0)
 
