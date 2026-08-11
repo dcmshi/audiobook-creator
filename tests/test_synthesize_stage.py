@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from pathlib import Path
@@ -173,3 +174,104 @@ def test_clean_run_leaves_no_stale_failure_records(tmp_path: Path):
     synth_stage.run_stage(job)
     assert not [k for k in job.state.errors if k.startswith("synthesize:")]
     assert (job.audio_dir / "000.wav").exists()
+
+
+class FixedBackend:
+    """Fixed-length PCM per call, so a duration delta isolates inserted silence."""
+
+    name = "fixed"
+    sample_rate = 24000
+
+    def synthesize(self, text: str, voice: str) -> bytes:
+        return b"\x01\x00" * 2400  # 0.1s
+
+
+register_backend("fixed", FixedBackend, is_local=True)
+
+
+def _voice_recorder(name: str) -> list[tuple[str, str]]:
+    """Register a backend under `name` that records every (voice, text) it is asked for."""
+    recorded: list[tuple[str, str]] = []
+
+    class VoiceRecorder:
+        sample_rate = 24000
+
+        def __init__(self):
+            self.name = name
+
+        def synthesize(self, text: str, voice: str) -> bytes:
+            recorded.append((voice, text))
+            return b"\x01\x00" * 240
+
+    VoiceRecorder.name = name
+    register_backend(name, VoiceRecorder, is_local=True)
+    return recorded
+
+
+def test_speaker_tags_switch_voices(tmp_path: Path):
+    recorded = _voice_recorder("rec-switch")
+    job = _job_with_processed(
+        tmp_path,
+        {"000.txt": "[[speaker:1]] Hello there listener.\n[[speaker:2]] And hello back to you."},
+        backend="rec-switch",
+    )
+    synth_stage.run_stage(job)
+    assert [voice for voice, _ in recorded] == ["af_heart", "am_adam"]
+
+
+def test_untagged_text_uses_config_voice(tmp_path: Path):
+    recorded = _voice_recorder("rec-plain")
+    job = _job_with_processed(
+        tmp_path, {"000.txt": "Plain narration text."}, backend="rec-plain"
+    )
+    synth_stage.run_stage(job)
+    assert (job.audio_dir / "000.wav").exists()
+    assert [voice for voice, _ in recorded] == ["af_heart"]
+
+
+def test_out_of_range_speaker_uses_default_voice_and_warns_once(tmp_path: Path, caplog):
+    recorded = _voice_recorder("rec-range")
+    job = _job_with_processed(
+        tmp_path,
+        {"000.txt": "[[speaker:9]] One.\n[[speaker:9]] Two.\n[[speaker:9]] Three."},
+        backend="rec-range",
+    )
+    with caplog.at_level(logging.WARNING):
+        synth_stage.run_stage(job)
+    assert [voice for voice, _ in recorded] == ["af_heart"] * 3
+    warnings = [r for r in caplog.records if "speaker" in r.getMessage()]
+    assert len(warnings) == 1  # once per chapter, not once per line
+
+
+def test_silence_separates_turns_with_different_voices(tmp_path: Path):
+    two_voices = _job_with_processed(
+        tmp_path / "diff",
+        {"000.txt": "[[speaker:1]] One.\n[[speaker:2]] Two."},
+        backend="fixed",
+    )
+    synth_stage.run_stage(two_voices)
+    one_voice = _job_with_processed(
+        tmp_path / "same",
+        {"000.txt": "[[speaker:1]] One.\n[[speaker:1]] Two."},
+        backend="fixed",
+    )
+    synth_stage.run_stage(one_voice)
+    delta = wav_duration_seconds(two_voices.audio_dir / "000.wav") - wav_duration_seconds(
+        one_voice.audio_dir / "000.wav"
+    )
+    assert delta == pytest.approx(0.3, abs=0.02)
+
+
+def test_orphaned_chapter_audio_is_removed(tmp_path: Path):
+    """A verbatim job re-run as a podcast must not keep the old chapters' audio."""
+    job = _job_with_processed(
+        tmp_path, {"000.txt": "One.", "001.txt": "Two.", "002.txt": "Three."}
+    )
+    synth_stage.run_stage(job)
+    assert len(list(job.audio_dir.glob("*.wav"))) == 3
+    for name in ("001.txt", "002.txt"):
+        (job.processed_dir / name).unlink()
+    (job.processed_dir / "000.txt").write_text("[[speaker:1]] Digest.", encoding="utf-8")
+    synth_stage.run_stage(job)
+    assert [w.name for w in sorted(job.audio_dir.glob("*.wav"))] == ["000.wav"]
+    assert (job.audio_dir / "cache").is_dir()  # the chunk cache is not swept

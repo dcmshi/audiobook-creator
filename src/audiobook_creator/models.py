@@ -54,6 +54,8 @@ class JobConfig(BaseModel):
     mode: Mode = Mode.VERBATIM
     tts_backend: str = "kokoro"
     voice: str = "af_heart"
+    # Podcast mode only: [[speaker:N]] picks podcast_voices[N-1], falling back to `voice`.
+    podcast_voices: list[str] = ["af_heart", "am_adam"]
     local_only: bool = False
     use_llm: bool = True
     # None = local-first default; "anthropic"/"kimi"/"ollama" force one

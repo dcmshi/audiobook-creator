@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -11,6 +12,10 @@ logger = logging.getLogger(__name__)
 PAUSE = "[[pause]]"
 _PAUSE_SECONDS = 0.7
 _FAIL_SILENCE_SECONDS = 0.3
+_TURN_SILENCE_SECONDS = 0.3
+
+# Podcast mode writes one utterance per line, tagged with the speaker it belongs to.
+_SPEAKER = re.compile(r"^\[\[speaker:(\d+)\]\]\s*", re.MULTILINE)
 _RETRIES = 2
 # Slept before the second and third attempts so a retry can outlast a brief outage
 # rather than firing all three within microseconds. Tests patch this to zeros.
@@ -49,35 +54,82 @@ def _recorded_stems(value: str | None) -> list[str]:
     return [stem for stem in (value or "").split(",") if stem]
 
 
+def _speaker_turns(
+    segment: str,
+    default_voice: str,
+    podcast_voices: list[str],
+    unknown_speakers: set[int] | None = None,
+) -> list[tuple[str, str]]:
+    """Split a segment into (voice, text) turns; untagged text -> default voice."""
+    turns: list[tuple[str, str]] = []
+    # split() yields [before, n1, text1, n2, text2, ...]; `before` is untagged narration,
+    # which is every chapter in verbatim and rewrite mode.
+    parts = _SPEAKER.split(segment)
+    if parts[0].strip():
+        turns.append((default_voice, parts[0].strip()))
+    for number, text in zip(parts[1::2], parts[2::2], strict=True):
+        speaker = int(number)
+        if 1 <= speaker <= len(podcast_voices):
+            voice = podcast_voices[speaker - 1]
+        else:
+            voice = default_voice
+            if unknown_speakers is not None:
+                unknown_speakers.add(speaker)
+        if text.strip():
+            turns.append((voice, text.strip()))
+    return turns
+
+
 def _synthesize_chapter(
-    backend: TTSBackend, voice: str, cache_dir: Path, text: str
+    backend: TTSBackend,
+    voice: str,
+    cache_dir: Path,
+    text: str,
+    podcast_voices: list[str] | None = None,
 ) -> tuple[bytes, int, int]:
     """Return (pcm, chunks attempted, chunks failed) for one chapter's text."""
     pcm = bytearray()
     attempted = 0
     failed = 0
+    unknown_speakers: set[int] = set()
     segments = text.split(PAUSE)
+    previous_voice: str | None = None
     for i, segment in enumerate(segments):
-        for chunk in chunk_text(segment):
-            attempted += 1
-            key = hashlib.sha1(f"{backend.name}|{voice}|{chunk}".encode()).hexdigest()
-            cached = cache_dir / f"{key}.pcm"
-            if cached.exists():
-                pcm += cached.read_bytes()
-                continue
-            try:
-                data = _synth_chunk(backend, chunk, voice)
-            except ChunkSynthesisError as exc:
-                # Silence stands in for this run only. Caching it would turn a passing
-                # outage into permanent, silent damage on every later run.
-                failed += 1
-                logger.debug("%s", exc)
-                pcm += _silence(_FAIL_SILENCE_SECONDS, backend.sample_rate)
-                continue
-            cached.write_bytes(data)
-            pcm += data
+        for turn_voice, turn_text in _speaker_turns(
+            segment, voice, podcast_voices or [], unknown_speakers
+        ):
+            if previous_voice is not None and turn_voice != previous_voice:
+                pcm += _silence(_TURN_SILENCE_SECONDS, backend.sample_rate)
+            previous_voice = turn_voice
+            for chunk in chunk_text(turn_text):
+                attempted += 1
+                key = hashlib.sha1(f"{backend.name}|{turn_voice}|{chunk}".encode()).hexdigest()
+                cached = cache_dir / f"{key}.pcm"
+                if cached.exists():
+                    pcm += cached.read_bytes()
+                    continue
+                try:
+                    data = _synth_chunk(backend, chunk, turn_voice)
+                except ChunkSynthesisError as exc:
+                    # Silence stands in for this run only. Caching it would turn a passing
+                    # outage into permanent, silent damage on every later run.
+                    failed += 1
+                    logger.debug("%s", exc)
+                    pcm += _silence(_FAIL_SILENCE_SECONDS, backend.sample_rate)
+                    continue
+                cached.write_bytes(data)
+                pcm += data
         if i < len(segments) - 1:
             pcm += _silence(_PAUSE_SECONDS, backend.sample_rate)
+            # The pause already separates the turns around it; another turn gap on top of it
+            # would stretch an authored 0.7s break to a full second.
+            previous_voice = None
+    if unknown_speakers:
+        logger.warning(
+            "no voice configured for speaker(s) %s; used %r. Set podcast_voices to add more.",
+            ", ".join(str(n) for n in sorted(unknown_speakers)),
+            voice,
+        )
     return bytes(pcm), attempted, failed
 
 
@@ -112,6 +164,20 @@ def run_stage(job: Job) -> None:
     for stem in _recorded_stems(job.state.errors.get(DEGRADED_KEY)):
         (job.audio_dir / f"{stem}.wav").unlink(missing_ok=True)
 
+    # A mode switch re-runs this stage over a different set of chapters; packaging globs every
+    # WAV here, so audio whose source text is gone would be appended to the new book. Top-level
+    # only: the chunk cache lives in a subdirectory and stays.
+    stems = {path.stem for path in job.processed_dir.glob("*.txt")}
+    orphans = sorted(p for p in job.audio_dir.glob("*.wav") if p.stem not in stems)
+    if orphans:
+        logger.warning(
+            "removing %d chapter audio file(s) with no processed text: %s",
+            len(orphans),
+            ", ".join(p.stem for p in orphans),
+        )
+        for path in orphans:
+            path.unlink()
+
     attempted = 0
     failed = 0
     degraded: list[str] = []
@@ -125,7 +191,11 @@ def run_stage(job: Job) -> None:
         if wav_path.exists() and wav_path.stat().st_mtime_ns >= txt_path.stat().st_mtime_ns:
             continue
         pcm, chapter_attempted, chapter_failed = _synthesize_chapter(
-            backend, cfg.voice, cache_dir, txt_path.read_text(encoding="utf-8")
+            backend,
+            cfg.voice,
+            cache_dir,
+            txt_path.read_text(encoding="utf-8"),
+            cfg.podcast_voices,
         )
         attempted += chapter_attempted
         failed += chapter_failed
