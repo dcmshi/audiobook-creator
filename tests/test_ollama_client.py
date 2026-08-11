@@ -234,3 +234,37 @@ def test_rewrite_window_shaped_call_does_not_warn(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         client.complete("x" * 6000, max_tokens=8192)  # ~2000 prompt tokens, 8192 window
     assert caplog.text == ""
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"message": "s"}',
+        b'{"message": {"content": 42}}',
+        b'{"message": []}',
+    ],
+)
+def test_malformed_message_shape_raises_llm_error(monkeypatch, body):
+    """Well-formed JSON object, wrong types inside: degrade, never AttributeError."""
+    monkeypatch.setattr(ollama_client.request, "urlopen", _BadBodyHTTP(body))
+    client = ollama_client.OllamaClient()
+    with pytest.raises(LLMError):
+        client.complete("x")
+
+
+def test_schemeless_url_raises_llm_error_on_the_chat_call(monkeypatch):
+    """Request() construction can raise ValueError; it belongs inside the containment."""
+    fake = _FakeHTTP()
+    monkeypatch.setattr(ollama_client.request, "urlopen", fake)
+    client = ollama_client.OllamaClient()
+    client.base = ""  # no scheme at all: Request() rejects it before opening a socket
+    with pytest.raises(LLMError, match="Ollama call failed"):
+        client.complete("x")
+
+
+def test_unreadable_figure_raises_llm_error(monkeypatch, tmp_path):
+    fake = _FakeHTTP()
+    monkeypatch.setattr(ollama_client.request, "urlopen", fake)
+    client = ollama_client.OllamaClient()
+    with pytest.raises(LLMUnsupported):
+        client.describe_image(tmp_path / "missing.png", "describe")

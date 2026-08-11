@@ -105,13 +105,15 @@ class OllamaClient:
                 "options": {"num_predict": max_tokens, "num_ctx": num_ctx},
             }
         ).encode("utf-8")
-        req = request.Request(
-            f"{self.base}/api/chat",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
         try:
+            # Request() is inside the try: a schemeless or malformed base URL raises
+            # ValueError here, before any socket is opened.
+            req = request.Request(
+                f"{self.base}/api/chat",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
             with request.urlopen(req, timeout=600) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         # HTTPError subclasses OSError; a non-JSON or mis-encoded body raises ValueError; a
@@ -122,11 +124,20 @@ class OllamaClient:
             raise LLMError(
                 f"Ollama call failed: response body was {type(data).__name__}, not an object"
             )
-        # `or ""`, not a .get default: a `content: null` body yields None, which the default
-        # would not catch.
-        text = (data.get("message") or {}).get("content") or ""
-        if not text.strip():
+        # Type-checked at each level, like the Kimi client: a well-formed JSON object can still
+        # carry wrong types inside ({"message": "s"}), and an AttributeError would kill the run.
+        message = data.get("message")
+        if not isinstance(message, dict):
+            raise LLMError(
+                f"Ollama call failed: message was {type(message).__name__}, not an object"
+            )
+        text = message.get("content")
+        # A null or blank content field is an empty answer, not a malformed one — the two get
+        # different messages because only the second points at a broken server or model.
+        if text is None or (isinstance(text, str) and not text.strip()):
             raise LLMError("Ollama returned no text")
+        if not isinstance(text, str):
+            raise LLMError(f"Ollama call failed: content was {type(text).__name__}, not text")
         return text
 
     def describe_image(self, image_path: Path, prompt: str, *, max_tokens: int = 1024) -> str:

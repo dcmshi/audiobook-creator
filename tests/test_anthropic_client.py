@@ -76,3 +76,9 @@ def test_live_complete_smoke():
     client = AnthropicClient()
     out = client.complete("Reply with exactly: pong")
     assert "pong" in out.lower()
+
+
+def test_unreadable_image_raises_llm_error(tmp_path: Path):
+    client, _ = _client_with(_text_response("unused"))
+    with pytest.raises(LLMError, match="cannot read"):
+        client.describe_image(tmp_path / "missing.png", "describe")

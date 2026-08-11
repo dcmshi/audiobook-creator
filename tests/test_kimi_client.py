@@ -121,3 +121,21 @@ def test_live_complete_smoke():
     client = kimi_client.KimiClient()
     out = client.complete("Reply with exactly: pong")
     assert "pong" in out.lower()
+
+
+def test_schemeless_url_raises_llm_error(monkeypatch, api_key):
+    """Request() construction can raise ValueError; it belongs inside the containment."""
+    monkeypatch.setenv("ABC_KIMI_URL", "api.moonshot.ai/v1")  # no scheme
+    client = kimi_client.KimiClient()
+    with pytest.raises(LLMError, match="Kimi call failed"):
+        client.complete("x")
+
+
+def test_unreadable_image_raises_llm_error(monkeypatch, api_key, tmp_path: Path):
+    def fake_urlopen(req, timeout=None):
+        raise AssertionError("must fail before any request")
+
+    monkeypatch.setattr(kimi_client.request, "urlopen", fake_urlopen)
+    client = kimi_client.KimiClient()
+    with pytest.raises(LLMError, match="Kimi"):
+        client.describe_image(tmp_path / "missing.png", "describe")

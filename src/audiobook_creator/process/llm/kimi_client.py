@@ -31,16 +31,18 @@ class KimiClient:
                 "stream": False,
             }
         ).encode("utf-8")
-        req = request.Request(
-            f"{self.base}/chat/completions",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self._key}",
-            },
-            method="POST",
-        )
         try:
+            # Request() is inside the try: a schemeless or malformed ABC_KIMI_URL raises
+            # ValueError here, before any socket is opened.
+            req = request.Request(
+                f"{self.base}/chat/completions",
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self._key}",
+                },
+                method="POST",
+            )
             with request.urlopen(req, timeout=600) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         # HTTPError subclasses OSError (auth, rate limits); a non-JSON or mis-encoded body raises
@@ -77,7 +79,13 @@ class KimiClient:
         media_type = _MEDIA_TYPES.get(image_path.suffix.lower())
         if media_type is None:
             raise LLMError(f"unsupported image type: {image_path.suffix}")
-        data = base64.standard_b64encode(image_path.read_bytes()).decode("ascii")
+        # A figure recorded at ingest can be gone or unreadable by the time it is described;
+        # that is this layer's failure to report, not an OSError for the caller to trip over.
+        try:
+            raw = image_path.read_bytes()
+        except OSError as exc:
+            raise LLMError(f"Kimi call failed: cannot read {image_path}: {exc}") from exc
+        data = base64.standard_b64encode(raw).decode("ascii")
         content = [
             {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{data}"}},
             {"type": "text", "text": prompt},

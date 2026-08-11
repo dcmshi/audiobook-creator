@@ -54,7 +54,13 @@ class AnthropicClient:
         media_type = _MEDIA_TYPES.get(image_path.suffix.lower())
         if media_type is None:
             raise LLMError(f"unsupported image type: {image_path.suffix}")
-        data = base64.standard_b64encode(image_path.read_bytes()).decode("ascii")
+        # A figure recorded at ingest can be gone or unreadable by the time it is described;
+        # that is this layer's failure to report, not an OSError for the caller to trip over.
+        try:
+            raw = image_path.read_bytes()
+        except OSError as exc:
+            raise LLMError(f"anthropic call failed: cannot read {image_path}: {exc}") from exc
+        data = base64.standard_b64encode(raw).decode("ascii")
         content = [
             {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data}},
             {"type": "text", "text": prompt},
