@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from audiobook_creator.models import Block, BlockType, Chapter
-from audiobook_creator.process.llm.base import LLMClient, LLMError
+from audiobook_creator.process.llm.base import LLMClient
 from audiobook_creator.process.llm.cache import _cache_key, cached_complete
 from audiobook_creator.process.rules import normalize
 from audiobook_creator.process.verbatim import PAUSE, PLACEHOLDER_TITLE
@@ -91,9 +91,10 @@ def _describe_figure(block: Block, client: LLMClient, cache_dir: Path) -> str:
         return block.text
     try:
         described = _cached_describe(client, cache_dir, Path(block.image_path), block.text)
-    # LLMUnsupported subclasses LLMError, so one branch covers a vision-less provider, an
-    # unsupported image type, and a provider error. OSError covers an asset gone missing.
-    except (LLMError, OSError) as exc:
+    # Broad on purpose: this runs outside the per-window try, so an unanticipated provider
+    # exception here would cost the whole book rather than one figure its description.
+    # LLMUnsupported subclasses LLMError, so a vision-less provider lands here too.
+    except Exception as exc:  # noqa: BLE001
         logger.info("figure description unavailable, using caption: %s", exc)
         return block.text
     return described.strip() or block.text
@@ -103,7 +104,11 @@ def _resolve_figures(chapter: Chapter, client: LLMClient, cache_dir: Path) -> li
     """Spoken text per block, aligned 1:1 with chapter.blocks ('' = nothing to narrate)."""
     spoken: list[str] = []
     for block in chapter.blocks:
-        if block.type is BlockType.FIGURE:
+        if block.type is BlockType.FOOTNOTE:
+            # Footnote bodies are not narrated in verbatim either; their inline markers are
+            # stripped from the prose that cites them.
+            spoken.append("")
+        elif block.type is BlockType.FIGURE:
             spoken.append(_describe_figure(block, client, cache_dir))
         else:
             spoken.append(block.text)
@@ -141,6 +146,25 @@ def _windows(texts: list[str], limit: int = _WINDOW_LIMIT) -> list[list[int]]:
     return windows
 
 
+# Same output contract the verbatim validator enforces: prose only, nothing a narrator would
+# have to read as a symbol.
+_FORBIDDEN_MARKUP = ("#", "**", "<")
+
+
+def _is_speakable(text: str) -> bool:
+    if any(marker in text for marker in _FORBIDDEN_MARKUP):
+        return False
+    # [[pause]] is the one bracket pair the prompt allows; anything else survived cleanup.
+    return "[[" not in text.replace(PAUSE, "")
+
+
+def _verbatim_window(items: list[tuple[Block, str, str]], window: list[int]) -> str:
+    """The window's own blocks, rule-normalized — the fallback when a rewrite is unusable."""
+    return "\n\n".join(
+        normalized for i in window if (normalized := normalize(items[i][2]))
+    )
+
+
 def render_rewrite(chapter: Chapter, client: LLMClient, cache_dir: Path) -> str:
     spoken = _resolve_figures(chapter, client, cache_dir)
     items = [
@@ -172,14 +196,17 @@ def render_rewrite(chapter: Chapter, client: LLMClient, cache_dir: Path) -> str:
         # than cost the book its conversion.
         except Exception as exc:  # noqa: BLE001
             logger.warning("window rewrite failed, falling back to verbatim text: %s", exc)
-            rewritten = "\n\n".join(
-                normalized
-                for i in window
-                if (normalized := normalize(items[i][2]))
-            )
-        # Markers first, then the rule pass: stripping leaves stray whitespace that
-        # normalize() tidies, and normalize() would otherwise run over scaffolding text.
-        rewritten = _normalize_prose(_strip_markers(rewritten))
+            rewritten = ""
+        else:
+            # Markers first, then the rule pass: stripping leaves stray whitespace that
+            # normalize() tidies, and normalize() would otherwise run over scaffolding text.
+            rewritten = _normalize_prose(_strip_markers(rewritten))
+            if rewritten and not _is_speakable(rewritten):
+                logger.warning("window rewrite contained markup, falling back to verbatim text")
+                rewritten = ""
+        # An empty rewrite is a lost window, so it takes the same road as a rejected one.
+        if not rewritten:
+            rewritten = _verbatim_window(items, window)
         if rewritten:
             parts.append(rewritten)
     return "\n\n".join(parts)

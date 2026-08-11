@@ -135,3 +135,34 @@ def test_stage_accepts_table_only_chapter_in_rewrite(tmp_path: Path, monkeypatch
     (job.chapters_dir / "000.json").write_text(ch.model_dump_json(), encoding="utf-8")
     process_stage.run_stage(job)  # must not raise: the table is what rewrite verbalizes
     assert (job.processed_dir / "000.txt").read_text(encoding="utf-8").strip()
+
+
+class MarkdownLLM(ScriptedLLM):
+    def complete(self, user, *, system=None, max_tokens=2048):
+        return "## Results heading\n\n**Growth** was strong, see <em>the table</em>."
+
+
+def test_markdown_output_falls_back_to_verbatim(tmp_path: Path):
+    out = render_rewrite(_chapter(tmp_path), MarkdownLLM(), tmp_path / "cache")
+    assert "#" not in out
+    assert "**" not in out
+    assert "<" not in out
+    assert "We measured growth." in out  # content survived through the verbatim fallback
+
+
+def test_footnotes_do_not_reach_the_window(tmp_path: Path):
+    llm = ScriptedLLM()
+    chapter = _chapter(tmp_path)
+    chapter.blocks.append(Block(type=BlockType.FOOTNOTE, text="1. See the appendix for detail."))
+    render_rewrite(chapter, llm, tmp_path / "cache")
+    assert "See the appendix" not in llm.window_inputs[0]
+
+
+def test_unexpected_vision_error_falls_back_to_caption(tmp_path: Path):
+    class OddVisionLLM(ScriptedLLM):
+        def describe_image(self, image_path, prompt, *, max_tokens=1024):
+            raise ValueError("provider returned something unexpected")
+
+    llm = OddVisionLLM()
+    render_rewrite(_chapter(tmp_path), llm, tmp_path / "cache")  # must not raise
+    assert "Figure 1: growth curve." in llm.window_inputs[0]
