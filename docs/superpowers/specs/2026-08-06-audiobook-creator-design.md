@@ -152,5 +152,20 @@ Deviations and additions relative to this spec, all review-adjudicated:
 - **Mode status:** `verbatim` fully working (rule-based path; LLM path is Plan 2). `rewrite`/`podcast` rejected at preflight until Plan 2. Podcast speaker markup contract: `[[speaker:N]]` line prefixes.
 - **Known-deferred minors** are ledgered in the Plan 1 final review (see git history); notable for Plan 2: figure image extraction (`assets_dir` unused on the docling path), EPUB2 cover detection, cache key omits sample_rate.
 
-**Plan 2 — LLM layer: planned** (`docs/superpowers/plans/2026-08-07-llm-layer.md`). Providers: Ollama (local, the only implicit default), Anthropic, and Kimi/Moonshot (both added as explicit per-job opt-in paid providers, 2026-08-08) — superseding this spec's "frontier API by default" and "Anthropic/Gemini" wording above. Rationale: chat subscriptions at both vendors exclude API billing, so paid API calls must never happen implicitly.
+**Plan 2 — LLM layer: SHIPPED 2026-08-11** (plan: `docs/superpowers/plans/2026-08-07-llm-layer.md`; 11 tasks + final-review fix wave, 279 hermetic tests). Providers: Ollama (local, the only implicit default), Anthropic, and Kimi/Moonshot (explicit per-job opt-in paid providers via `--llm`) — superseding this spec's "frontier API by default" and "Anthropic/Gemini" wording. Rationale: chat subscriptions at both vendors exclude API billing, so paid API calls never happen implicitly.
+
+Plan 2 controller rulings that superseded plan-literal values (each argued in the SDD ledger, now git history):
+- Ollama under `local_only` is loopback-only (hostnames are treated as remote — DNS resolution is itself a network action); the registry's `is_local` accepts a predicate evaluated before construction, so a refused provider never emits a packet.
+- Ollama calls send `think: false` (thinking models otherwise spend the `num_predict` budget and return empty content) and an explicit `options.num_ctx` (`ABC_OLLAMA_NUM_CTX`, default 8192) with a warning when the prompt alone cannot fit.
+- Cache keys are length-prefix injective and include `max_tokens`; writes are atomic (tmp + replace); failures are never cached.
+- The verbatim validator's length-ratio ceiling is 2.5 (was 1.5 — correct TTS normalization of dense numeric text measures at ~1.8; the forbidden-marker check owns the commentary failure mode).
+- `<p><img/></p>`-wrapped figures are recovered (text-free wrapper bypasses the ancestor guard); corrupt EPUB assets degrade with a per-book warning instead of failing ingest.
+- The output contract is one module (`process/output_contract.py`): reject where a fallback exists (verbatim/rewrite windows), sanitize where none does (fallback text), fail loud where the mode is fail-loud (podcast). Podcast requires both speakers.
+- Mode switches are coherent across all three artifact directories (processed/, chapters/, audio/) via post-validation sweeps.
+- The structure tiebreaker enforces "never flip every chapter out of body" as an outcome check, not window arithmetic.
+- Windows PDF ingest sets `TORCHDYNAMO_DISABLE=1` (setdefault) before importing docling — its layout model's torch.compile requires MSVC and crashes otherwise.
+
+Accepted asymmetries (reasoned in fix rounds; do not relitigate): Anthropic prompt-cache block is a no-op below the 512-token minimum (plan-mandated shape kept); `resume` has no preflight (in-stage failure, exit 1 vs preflight's 2); rewrite rejects markup on the success path but sanitizes on the fallback path; the LLM cache stores pre-validation responses.
+
+**Open items for the user (parked plan-mandated findings):** (1) the Anthropic credential probe only detects env keys — an `ant auth login` OAuth profile silently downgrades verbatim to rules under `--llm anthropic`; (2) adaptive thinking shares the `max_tokens` budget on `claude-opus-5` — defaults of 2048/1024 can silently pay for thinking and return rule-based output; settle before real-money runs. Also unverified: any paid-provider end-to-end run (`-m llm_live`), and a listening pass on two-voice podcast audio.
 **Plan 3 — web UI: planned** (`docs/superpowers/plans/2026-08-07-web-ui.md`).
