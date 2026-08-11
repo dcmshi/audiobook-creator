@@ -73,14 +73,23 @@ class OllamaClient:
         # Declared rather than left to the server default: Ollama silently drops whatever does
         # not fit, so an undeclared window turns a too-long chapter into quietly missing text.
         num_ctx = _num_ctx()
-        # num_ctx bounds the prompt AND the generation, so the output budget counts: a 16k
-        # podcast script overflows the 8192 default on its own, whatever the source size.
         estimated_tokens = sum(len(m["content"]) for m in messages) // _CHARS_PER_TOKEN
-        if estimated_tokens + max_tokens > num_ctx:
+        # Two different problems. A prompt that does not fit is silently truncated, and the
+        # caller never learns which text was dropped — that is worth a warning. A budget the
+        # window cannot fully honour only means generation may stop early, and max_tokens is a
+        # ceiling rather than a demand, so warning about it would fire on every ordinary
+        # rewrite window and teach everyone to ignore the line above.
+        if estimated_tokens > num_ctx:
             logger.warning(
-                "prompt (~%d tokens) plus the %d-token output budget exceeds the Ollama context "
-                "window of %d; the overflow is dropped silently. Raise ABC_OLLAMA_NUM_CTX, or "
-                "lower the budget.",
+                "prompt is roughly %d tokens but the Ollama context window is %d; the overflow "
+                "is dropped silently. Raise ABC_OLLAMA_NUM_CTX or use a smaller input.",
+                estimated_tokens,
+                num_ctx,
+            )
+        elif estimated_tokens + max_tokens > num_ctx:
+            logger.debug(
+                "prompt (~%d tokens) plus a %d-token budget exceeds the %d-token window; "
+                "generation stops early if it runs that long.",
                 estimated_tokens,
                 max_tokens,
                 num_ctx,

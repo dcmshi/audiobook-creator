@@ -215,12 +215,22 @@ def test_prompt_within_the_context_window_is_quiet(monkeypatch, caplog):
     assert caplog.text == ""
 
 
-def test_generation_budget_counts_against_the_context_window(monkeypatch, caplog):
-    """num_ctx bounds prompt plus generation: podcast's 16k budget alone overflows the default."""
+def test_podcast_sized_prompt_warns(monkeypatch, caplog):
+    """A whole-document prompt genuinely does not fit, and that truncation is silent."""
     fake = _FakeHTTP()
     monkeypatch.setattr(ollama_client.request, "urlopen", fake)
     client = ollama_client.OllamaClient()
     with caplog.at_level(logging.WARNING):
-        client.complete("a short source", max_tokens=16000)
+        client.complete("storm " * 50_000, max_tokens=16000)  # ~100k estimated tokens
     assert "8192" in caplog.text
     assert any("token" in r.getMessage() for r in caplog.records)
+
+
+def test_rewrite_window_shaped_call_does_not_warn(monkeypatch, caplog):
+    """A 6k-char window with an 8192 ceiling fits; warning here would fire on every chapter."""
+    fake = _FakeHTTP()
+    monkeypatch.setattr(ollama_client.request, "urlopen", fake)
+    client = ollama_client.OllamaClient()
+    with caplog.at_level(logging.WARNING):
+        client.complete("x" * 6000, max_tokens=8192)  # ~2000 prompt tokens, 8192 window
+    assert caplog.text == ""
