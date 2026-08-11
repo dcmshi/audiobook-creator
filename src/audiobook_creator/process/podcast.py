@@ -4,7 +4,7 @@ from pathlib import Path
 
 from audiobook_creator.models import Chapter
 from audiobook_creator.process.llm.base import LLMClient, LLMError
-from audiobook_creator.process.llm.cache import cached_complete
+from audiobook_creator.process.llm.cache import cached_complete, evict
 from audiobook_creator.process.output_contract import is_speakable
 from audiobook_creator.process.rules import normalize
 
@@ -101,8 +101,15 @@ def render_podcast(
     # Cap the assembled prompt, not just the body: the cap exists to bound what is sent, and
     # the title header would otherwise push the request past it.
     user = _cap_source(f"Document title: {doc_title}\n\n{_assemble_source(chapters)}")
-    # No try/except: an LLMError here must reach the stage. See _validate_script.
+    # No try/except around the call itself: an LLMError from the provider must reach the stage.
     script = cached_complete(
         client, cache_dir, user, system=PODCAST_SYSTEM, max_tokens=_SCRIPT_MAX_TOKENS
     )
-    return _validate_script(script)
+    try:
+        return _validate_script(script)
+    except LLMError:
+        # The key is deterministic, so a rejected script left in the cache would be re-read and
+        # re-rejected on every later run — the job would be permanently unrunnable, and nothing
+        # in the error would point at the cache. Drop it so the next run regenerates.
+        evict(client, cache_dir, user, system=PODCAST_SYSTEM, max_tokens=_SCRIPT_MAX_TOKENS)
+        raise

@@ -206,3 +206,37 @@ def test_utterances_get_the_rules_post_pass(tmp_path: Path):
     assert "40 percent" in out
     assert "Figure 3" in out
     assert out.splitlines()[-1].startswith("[[speaker:2]] ")  # the tag survives the pass
+
+
+def test_rejected_script_is_evicted_so_the_next_run_regenerates(tmp_path: Path):
+    """The trap: a deterministic key plus a cached bad script makes a job unrunnable forever."""
+
+    class FlipFlopLLM(PodcastLLM):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+
+        def complete(self, user, *, system=None, max_tokens=2048):
+            self.calls += 1
+            if self.calls == 1:
+                return _SCRIPT.replace("Storms are loud", "Storms are **loud**")
+            return _SCRIPT
+
+    llm = FlipFlopLLM()
+    cache_dir = tmp_path / "cache"
+    with pytest.raises(LLMError, match="markup"):
+        render_podcast("T", _chapters(), llm, cache_dir)
+    assert list(cache_dir.glob("*.txt")) == []  # the bad script did not survive
+
+    out = render_podcast("T", _chapters(), llm, cache_dir)
+    assert "[[speaker:2]] Storms are loud, and the data proves it." in out
+    assert llm.calls == 2  # the second run really did re-generate
+
+
+def test_accepted_script_stays_cached(tmp_path: Path):
+    """Eviction must be scoped to rejection: a good script is still served from cache."""
+    llm = PodcastLLM()
+    cache_dir = tmp_path / "cache"
+    render_podcast("T", _chapters(), llm, cache_dir)
+    render_podcast("T", _chapters(), llm, cache_dir)
+    assert len(llm.prompts) == 1
