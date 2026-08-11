@@ -161,7 +161,15 @@ def _is_speakable(text: str) -> bool:
 # Markdown and XML in their real forms. Deliberately NOT part of _strip_markers: that runs
 # before _is_speakable, so sanitising there would leave the validator nothing to catch and
 # silently pass markup-bearing rewrites through.
-_MARKUP = re.compile(r"<[^>]+>|\*\*|^\s*#{1,6}\s*", re.MULTILINE)
+#
+# Both patterns are bounded to a single line, because this runs over blocks already joined and
+# it is the one path whose job is never to lose content:
+#   - a tag needs a tag-like opening and no newline, or prose comparing "a < b" in one block to
+#     "c > d" in a later one would have everything between them deleted (get_text() decodes
+#     &lt;/&gt; back into literal angle brackets, so that prose really does reach block text);
+#   - the heading marker uses [ \t] rather than \s, or the blank line before "## B" is eaten and
+#     a paragraph break degrades to a line break that _normalize_prose cannot restore.
+_MARKUP = re.compile(r"<[/a-zA-Z][^>\n]*>|\*\*|^[ \t]*#{1,6}[ \t]*", re.MULTILINE)
 
 
 def _verbatim_window(items: list[tuple[Block, str, str]], window: list[int]) -> str:

@@ -197,3 +197,33 @@ def test_empty_rewrite_logs_and_falls_back(tmp_path: Path, caplog):
         out = render_rewrite(_chapter(tmp_path), EmptyLLM(), tmp_path / "cache")
     assert "no text" in caplog.text  # the third road warns like the other two
     assert "We measured growth." in out
+
+
+class HeadingVisionLLM(ScriptedLLM):
+    """Rewrite gets rejected, so the fallback runs over a description with a heading in it."""
+
+    def complete(self, user, *, system=None, max_tokens=2048):
+        return "## Rejected heading"
+
+    def describe_image(self, image_path, prompt, *, max_tokens=1024):
+        return "First part.\n\n## Second part heading"
+
+
+def test_fallback_preserves_comparison_operators_across_blocks(tmp_path: Path):
+    """A stray < in one block and > in a later one must not delete everything between."""
+    chapter = Chapter(
+        index=0,
+        title="Math",
+        blocks=[
+            Block(type=BlockType.PARAGRAPH, text="The guard holds if a < b in every case."),
+            Block(type=BlockType.PARAGRAPH, text="It fails when c > d, which we never allow."),
+        ],
+    )
+    out = render_rewrite(chapter, MarkupVisionLLM(), tmp_path / "cache")
+    assert "if a < b in every case" in out
+    assert "It fails when c > d" in out
+
+
+def test_fallback_keeps_paragraph_break_before_heading(tmp_path: Path):
+    out = render_rewrite(_chapter(tmp_path), HeadingVisionLLM(), tmp_path / "cache")
+    assert "First part.\n\nSecond part heading" in out
