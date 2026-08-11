@@ -158,11 +158,22 @@ def _is_speakable(text: str) -> bool:
     return "[[" not in text.replace(PAUSE, "")
 
 
+# Markdown and XML in their real forms. Deliberately NOT part of _strip_markers: that runs
+# before _is_speakable, so sanitising there would leave the validator nothing to catch and
+# silently pass markup-bearing rewrites through.
+_MARKUP = re.compile(r"<[^>]+>|\*\*|^\s*#{1,6}\s*", re.MULTILINE)
+
+
 def _verbatim_window(items: list[tuple[Block, str, str]], window: list[int]) -> str:
-    """The window's own blocks, rule-normalized — the fallback when a rewrite is unusable."""
-    return "\n\n".join(
-        normalized for i in window if (normalized := normalize(items[i][2]))
-    )
+    """The window's own blocks, cleaned and rule-normalized — the fallback for a bad rewrite.
+
+    Markup is stripped here rather than rejected: the fallback is the last resort, so there
+    is nothing further to fall back to. It needs the cleanup because it is not purely source
+    text — a FIGURE's spoken text is its vision description, model output that passes through
+    no other cleanup.
+    """
+    joined = "\n\n".join(items[i][2] for i in window)
+    return _normalize_prose(_MARKUP.sub("", _strip_markers(joined)))
 
 
 def render_rewrite(chapter: Chapter, client: LLMClient, cache_dir: Path) -> str:
@@ -201,10 +212,12 @@ def render_rewrite(chapter: Chapter, client: LLMClient, cache_dir: Path) -> str:
             # Markers first, then the rule pass: stripping leaves stray whitespace that
             # normalize() tidies, and normalize() would otherwise run over scaffolding text.
             rewritten = _normalize_prose(_strip_markers(rewritten))
-            if rewritten and not _is_speakable(rewritten):
+            # Each of the three roads to the fallback warns exactly once.
+            if not rewritten:
+                logger.warning("window rewrite returned no text, falling back to verbatim text")
+            elif not _is_speakable(rewritten):
                 logger.warning("window rewrite contained markup, falling back to verbatim text")
                 rewritten = ""
-        # An empty rewrite is a lost window, so it takes the same road as a rejected one.
         if not rewritten:
             rewritten = _verbatim_window(items, window)
         if rewritten:

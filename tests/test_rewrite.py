@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -166,3 +167,33 @@ def test_unexpected_vision_error_falls_back_to_caption(tmp_path: Path):
     llm = OddVisionLLM()
     render_rewrite(_chapter(tmp_path), llm, tmp_path / "cache")  # must not raise
     assert "Figure 1: growth curve." in llm.window_inputs[0]
+
+
+class MarkupVisionLLM(ScriptedLLM):
+    """Vision output carries markup, and the window rewrite is rejected — so the fallback runs."""
+
+    def complete(self, user, *, system=None, max_tokens=2048):
+        return "## Rejected heading"
+
+    def describe_image(self, image_path, prompt, *, max_tokens=1024):
+        return "**The figure shows** a rise, see <em>panel A</em>."
+
+
+def test_fallback_text_is_marker_free(tmp_path: Path):
+    out = render_rewrite(_chapter(tmp_path), MarkupVisionLLM(), tmp_path / "cache")
+    assert "**" not in out
+    assert "<" not in out
+    assert "#" not in out
+    assert "The figure shows" in out  # the description survived, minus its markup
+    assert "We measured growth." in out
+
+
+def test_empty_rewrite_logs_and_falls_back(tmp_path: Path, caplog):
+    class EmptyLLM(ScriptedLLM):
+        def complete(self, user, *, system=None, max_tokens=2048):
+            return "   "
+
+    with caplog.at_level(logging.WARNING):
+        out = render_rewrite(_chapter(tmp_path), EmptyLLM(), tmp_path / "cache")
+    assert "no text" in caplog.text  # the third road warns like the other two
+    assert "We measured growth." in out
